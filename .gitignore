@@ -1,0 +1,7 @@
+# Yerelde kalan dosyalar: müşteri adı içeren örnekler ve test çıktıları
+* OPTİMİZASYON HALİ.xlsx
+src/test/yerel/
+test-output.xlsx
+~$*
+*.tmp
+__pycache__/

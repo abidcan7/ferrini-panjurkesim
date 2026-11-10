@@ -1,0 +1,2 @@
+# ERP dışa aktarımları (Windows-1254, CRLF) bayt bayt korunur
+*.csv -text

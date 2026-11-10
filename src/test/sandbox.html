@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><title>PanjurKesim — kısıtlı çerçeve denemesi</title></head>
+<body style="font: 14px/1.4 system-ui, sans-serif; margin: 16px">
+<p>Aracın, onu başka bir portalın içinde gösteren kısıtlı çerçevede çalışıp çalışmadığını dener:
+<code>sandbox="allow-scripts allow-modals allow-downloads"</code>, <b>allow-same-origin yok</b>
+(köken "null", localStorage kapalı). Araç kendi kendini dener; sonuç aşağıya yazılır.
+Bir http sunucusu üzerinden açılmalıdır (ör. <code>py -m http.server</code> ile proje klasörü).</p>
+<pre id="sonuc">bekleniyor…</pre>
+<iframe id="f" sandbox="allow-scripts allow-modals allow-downloads" src="../../PanjurKesim.html?selftest=1" style="width:100%;height:640px;border:1px solid #ccc"></iframe>
+<script>
+addEventListener('message', function (e) { if (e.data && e.data.panjurSelftest) document.getElementById('sonuc').textContent = e.data.panjurSelftest; });
+</script>
+</body></html>
