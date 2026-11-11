@@ -35,7 +35,7 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
   ile en küçük adet arasındaki fark en çok **4** olabilir (43–39 gibi; ayarlanır). İdeal olan
   hepsinin eşit olmasıdır (43/43/43/43); araç sınırın içinde de farkı sıfıra doğru iter.
 - Sığma şartı: `Σ ölçü + kesim sayısı × testere payı ≤ çubuk boyu − emniyet payı`.
-- **Çubuk boyları: seçenek ve adet.** Parça tablosunda her parçanın satırında 6500, 5000 ve 4700
+- **Çubuk boyları: seçenek ve adet.** Parça tablosunda her parçanın satırında 6500, 6000, 5000 ve 4700
   seçenek olarak durur; **6500 işaretli gelir**, diğerlerini o parça için işaretlersiniz. İşaretli
   boyun yanına **adet** yazılabilir: o boydan stokta kaç çubuk olduğu (boş = sınır yok). Her grup
   işaretli boylardan **sığdığı en kısasından** kesilir; çubuğun maliyeti boyuyla orantılı sayılır.
@@ -202,13 +202,15 @@ dosyalar tarayıcıda okunur ve hiçbir yere gönderilmez. Bir portalın içinde
 (`<iframe sandbox="allow-scripts allow-modals allow-downloads">`, `allow-same-origin` olmadan,
 `connect-src 'none'` ile) çalışır:
 
-- `localStorage` kapalıysa ayarlar ve müşteri adları hatırlanmaz (her açılışta varsayılanlar gelir:
-  yalnızca 6500 işaretli, adet boş), başka bir şey değişmez;
+- `localStorage` kapalıysa ayarlar ve müşteri adları bir sonraki açılışa taşınmaz (her açılışta
+  varsayılanlar gelir: yalnızca 6500 işaretli, adet boş); sayfa açıkken yapılan seçimler bellekte
+  tutulur ve koşuya yansır;
 - paralel arama Web Worker'larla yapılır (betik `blob:` adresinden); içerik güvenlik politikası
   bunu engelliyorsa araç aynı aramayı ana iş parçacığında yapar (daha yavaş, sonuç aynı nitelikte);
 - Excel indirme için çerçevede `allow-downloads` gerekir.
 
-`src/test/sandbox.html` bu düzeni dener (bir http sunucusu üzerinden açılır).
+`src/test/sandbox.html` bu düzeni dener (bir http sunucusu üzerinden açılır): aramanın çalıştığını
+(`ok`) ve parça tablosundaki seçimlerin tarayıcı kaydı olmadan da yerinde kaldığını (`settingsKept`) gösterir.
 
 ## Geliştirme
 

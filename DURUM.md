@@ -60,7 +60,7 @@ pano U tek tek kesiliyor (demet 1).
 - Sonuçta `stats.barsByLen` (yazılan grupların çubukları, boya göre) ve `stats.kalanBarsByLen`
   (KALANLAR tahmini). Excel'de sayfanın başında "Çubuk: 6500 × 592 · 5000 × 131", grup başlığında
   "GRUP 3 · 5000"; gruplar boya göre uzundan kısaya dizilir.
-- Arayüz: genel "Çubuk boyları" alanı seçenek listesini verir (varsayılan `6500, 5000, 4700`). Parça
+- Arayüz: genel "Çubuk boyları" alanı seçenek listesini verir (varsayılan `6500, 6000, 5000, 4700`). Parça
   tablosunda her parçanın satırında her boy için işaret kutusu; **yalnızca en uzun boy (6500) işaretli
   gelir**. İşaretli boyun yanında adet alanı (stok; boş = sınır yok). Kayıt: `cfg.opts`
   (`{len, on, qty}`), türetilen `lengths` / `L` / `stock`; `CFG_VERSION = 2` (eski kayıtlarda seçim
@@ -184,8 +184,12 @@ Atlas dış araçları ayrı depodan günde bir kez eşitliyor ve kısıtlı çe
 - Kısıtlı çerçevede denendi: `localStorage` kapalı, araç çalışıyor, 8 worker `blob:` adresinden
   açılıyor. Worker'ları yasaklayan politikada (`worker-src 'none'`) ana iş parçacığına düşüp
   doğru sonuç veriyor.
-- **Atlas'ta ayarlar hatırlanmaz** (`localStorage` yok): her açılışta varsayılanlar gelir (yalnızca
-  6500 işaretli, adetler boş). 5000 / 4700 ve stok adetleri her açılışta yeniden işaretlenir.
+- **Atlas'ta ayarlar açılışlar arasında hatırlanmaz** (`localStorage` yok): her açılışta varsayılanlar
+  gelir (yalnızca 6500 işaretli, adetler boş). Sayfa açıkken yapılan seçimler bellekte tutulur.
+- **11.11 hatası:** parça ayarları her çizimde ve her koşudan önce `localStorage`'dan geri okunuyordu;
+  Atlas'ta kayıt olmadığı için işaretlenen çubuk boyu anında geri dönüyor, kapatılan parça, demet ve
+  en az grup toplamı da koşuya yansımıyordu (araç Atlas'ta hep varsayılanlarla çözüyordu). Ayarlar
+  artık bellekte (`matCfgMem`), kayıt yalnızca kopya. Kendi kendine test bunu denetliyor (`settingsKept`).
 - Yeni sürüm: Atlas bu depodan eşitliyorsa `main` dalındaki son commit bir sonraki eşitlemede alınır (günde bir kez); hangi kaynaktan aldığı Atlas tarafında teyit edilmeli.
 
 ## Açık konular
@@ -204,6 +208,8 @@ Atlas dış araçları ayrı depodan günde bir kez eşitliyor ve kısıtlı çe
    poz adedi kadar çubukla açılıyor; "bir poz aynı grupta iki satıra bölünebilir" bunu çözer (kapalı).
 8. KALANLAR, başka grubun kenarda bekleyen çubuklarından kesilirken adet sınırını dolaylı aşabilir.
 9. Arama rastlantısal: aynı girdide koşudan koşuya birkaç poz ya da çubuk oynayabilir.
+11. **PVC sineklik öteleme profili** (P-12442/3072) hâlâ "tanınmadı" geliyor; hangi boydan kesildiği
+    ve varsayılan olarak açık gelip gelmeyeceği bilinmiyor.
 10. Baskı: kâğıt çıktısı ve %100 ölçekli bilgisayar denenmedi.
 
 ## Dosyalar
@@ -256,6 +262,7 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
 | 11.11 | Çubuk boyları 6500 / 5000 / 4700: grup sığdığı en kısa boydan, boy başına çubuk sayısı (sayfa başı, ÖZET, ekran) |
 | 11.11 | Kutu, kutu kapağı, köşebent, pano U tanınıyor ve açık geliyor; strafor tanınıyor, kapalı. Kutulu örnek 24576 |
 | 11.11 | Çubuk boyları parça başına seçenek + stok adedi (6500 işaretli gelir); stok sınırı motoru (`assignStock`); KALANLAR çubuk tahmini parça bazında yerleştirmeyle |
+| 11.11 | **Düzeltme:** tarayıcı kaydı olmayan ortamda (Atlas) parça tablosundaki seçimler (çubuk boyu, adet, parçayı kapatma, demet, en az grup toplamı) tutmuyordu. Seçenek listesine 6000 eklendi |
 | 10.11 | En az grup toplamı kuralı (lamel 6250) ve buna göre arama; KALANLAR yalnızca liste + çubuk tahmini |
 | 10.11 | Baskı: başlığın kesilmesi düzeltildi (görünüm kaydı), sayfa başına iki sütun, elle sayfa sonları, sabit ölçek, altbilgide sayfa no; notlar kısaldı |
 | 10.11 | Kısıtlı çerçeve desteği: worker açılamazsa ana iş parçacığı; SheetJS 0.20.3; Node test koşucusu; GitHub deposu |
@@ -276,6 +283,12 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
   demetleri adet düzeylerinden hesaplanır, derleyici ve doğrulayıcı aynı kuralı kullanır.
 - Motor eski "aynı ölçüyü birleştir" yolunu hâlâ destekliyor (`mergeSameLength`), arayüzde kapalı;
   yalnızca birim testlerinde kullanılıyor.
+- **Arayüz durumu `localStorage`'dan geri okunmamalı.** Bellekteki kopya esastır; kayıt yalnızca
+  oturumlar arası hatırlama içindir. Arayüz değişikliklerini kayıt kapalıyken de dene:
+  `src/test/sandbox.html` (gerçek kısıtlı çerçeve) ya da tarayıcıda `localStorage` erişimini
+  engelleyerek. Kayıt açıkken yapılan deneme bu tür hataları göstermez.
+- Yerel sunucudan denerken tarayıcı önbelleği yeniden derlenen sayfanın eskisini birkaç dakika
+  sunabilir; temiz profil ya da adrese değişen bir sorgu ekle.
 - Sanal zamanlı headless Chrome (`--virtual-time-budget`) ana iş parçacığındaki süreye bağlı aramayı
   bitiremez (saat ilerlemez); gerçek zamanlı deneme için tarayıcı hata ayıklama ucundan sürülmeli.
 - Excel'i otomasyonla açarken yalnızca kendi başlattığın gizli örneği kapat; kullanıcının açık

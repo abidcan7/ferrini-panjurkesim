@@ -36,7 +36,7 @@
 
   // ---------------------------------------------------------------- çubuk boyları
   // "6500, 5000, 4700" gibi bir metinden stok boyları (büyükten küçüğe, yinelenmeden)
-  const DEFAULT_LENGTHS = [6500, 5000, 4700];
+  const DEFAULT_LENGTHS = [6500, 6000, 5000, 4700];
   function parseLengths(text) {
     const out = [];
     for (const t of String(text == null ? '' : text).split(/[\s,;\/|+]+/)) {
@@ -141,7 +141,9 @@
   }
 
   // ---------------------------------------------------------------- dosyalar
-  function orderMemory() { return lsGet('panjur.orders', {}); }
+  // Proje bilgileri (müşteri, tarih, not) bellekte tutulur; tarayıcı kaydı varsa oturumlar arasında da hatırlanır.
+  let orderMem = null;
+  function orderMemory() { if (!orderMem) orderMem = lsGet('panjur.orders', {}) || {}; return orderMem; }
   function rememberOrder(f) {
     const m = orderMemory();
     m[f.orderNo] = { customer: f.customer, date: f.date, note: f.note };
@@ -209,8 +211,13 @@
   }
 
   // ---------------------------------------------------------------- malzeme ayarları
-  function matCfgAll() { return lsGet('panjur.mats', {}); }
-  function matCfgSave(key, cfg) { const all = matCfgAll(); all[key] = cfg; lsSet('panjur.mats', all); }
+  // Parça ayarları BELLEKTE tutulur; tarayıcı kaydı (localStorage) varsa oturumlar arasında da hatırlanır.
+  // Kısıtlı çerçevede (ör. bir portalın sandbox iframe'i) kayıt yoktur. Ayarlar eskiden her çizimde ve
+  // her koşudan önce kayıttan geri okunuyordu; kayıt olmayınca işaretlenen çubuk boyu, kapatılan parça,
+  // demet ve en az grup toplamı anında varsayılana dönüyordu.
+  let matCfgMem = null;
+  function matCfgAll() { if (!matCfgMem) matCfgMem = lsGet('panjur.mats', {}) || {}; return matCfgMem; }
+  function matCfgSave(key, cfg) { matCfgAll()[key] = cfg; lsSet('panjur.mats', matCfgMem); }
   // En az grup toplamı: lamelde çubuk boyunun 250 mm altı (6500 → 6250); diğer parçalarda kural yok (0).
   const MIN_SUM_SLACK = 250;
   function defaultMinSum(m, L) { return m.type === 'lamel' ? Math.max(0, L - MIN_SUM_SLACK) : 0; }
@@ -730,7 +737,26 @@
           const res = await optimizeMaterial(mat, P, 1500, () => {});
           let ls = true;
           try { localStorage.setItem('panjur.deneme', '1'); localStorage.removeItem('panjur.deneme'); } catch (e) { ls = false; }
-          pre.textContent = JSON.stringify({ ok: res.validation.ok, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
+          // Parça ayarları tarayıcı kaydı olmadan da yerinde kalıyor mu? Küçük bir proje yüklenir; bir boy
+          // işaretlenir, adet yazılır, bir parça kapatılır, demet değiştirilir; sonra koşudan önce
+          // yapıldığı gibi parçalar yeniden toplanır.
+          const rowsT = [];
+          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`);
+          await addFiles([new File([rowsT.join('\r\n')], '000000000099999_İmalat.csv')]);
+          const qs = (mi, mk, len) => document.querySelector(`#matList input[data-mi="${mi}"][data-mk="${mk}"]` + (len ? `[data-len="${len}"]` : ''));
+          const fire = (el, set) => { set(el); el.dispatchEvent(new Event('change', { bubbles: true })); };
+          const second = app.mats[0].cfg.opts[1].len;
+          fire(qs(0, 'lenOn', second), el => { el.checked = true; });
+          fire(qs(0, 'lenQty', second), el => { el.value = '7'; });
+          fire(qs(1, 'bundle'), el => { el.value = '3'; });
+          fire(qs(1, 'on'), el => { el.checked = false; });
+          app.mats = collectMaterials();
+          const c0 = app.mats[0].cfg, c1 = app.mats[1].cfg;
+          const settingsKept = c0.lengths.length === 2 && c0.stock[second] === 7 && qs(0, 'lenOn', second).checked === true && c1.bundle === 3 && c1.on === false;
+          for (const m of app.mats) delete matCfgAll()[m.key];      // deneme kayıtlarını geri al
+          lsSet('panjur.mats', matCfgAll());
+          app.files = []; renderFiles();
+          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
         } catch (e) { pre.textContent = 'HATA ' + (e && e.message); }
         // çerçeve içinde (ör. src/test/sandbox.html) koşuyorsa sonucu dış sayfaya bildir
         if (window.parent !== window) window.parent.postMessage({ panjurSelftest: pre.textContent }, '*');

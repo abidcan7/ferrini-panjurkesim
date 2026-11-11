@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panjur Kesim Optimizasyonu</title>
-<!-- build 2026-11-11 16:05 -->
+<!-- build 2026-11-11 17:05 -->
 <style>
   :root {
     --bg: #f3f4f6; --card: #ffffff; --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb;
@@ -46,7 +46,7 @@
   .mats td.name b { font-weight: 600; }
   .mats td.name .code { color: var(--muted); font-size: 11px; font-family: var(--mono); }
   .mats input[type=number] { width: 62px; }
-  input.lens { width: 132px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; text-align: right; }
+  input.lens { width: 172px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; text-align: right; }
   .mats td .hint { font-size: 11px; }
   .mats td.lenscell { white-space: nowrap; }
   .lenopt { display: inline-flex; align-items: center; gap: 3px; margin-left: 10px; color: #9ca3af; }
@@ -134,7 +134,7 @@
 <body>
 <header>
   <h1>Panjur Kesim Optimizasyonu</h1>
-  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, kutu, dikme, alt parça, tambur · 6500 mm çubuk, isteğe bağlı 5000 ve 4700</span>
+  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, kutu, dikme, alt parça, tambur · 6500 mm çubuk, isteğe bağlı 6000, 5000 ve 4700</span>
 </header>
 <main>
   <section class="card" id="sec-files">
@@ -153,7 +153,7 @@
     <div class="params">
       <fieldset>
         <legend>Çubuk ve testere</legend>
-        <div class="row"><label>Çubuk boyları <input type="text" id="pL" class="lens" value="6500, 5000, 4700"> mm</label></div>
+        <div class="row"><label>Çubuk boyları <input type="text" id="pL" class="lens" value="6500, 6000, 5000, 4700"> mm</label></div>
         <div class="hint" style="margin-bottom:6px">Parça tablosunda seçenek olarak çıkan boylar, virgülle. Her parçada en uzunu işaretli gelir; diğerlerini parça parça işaretlersiniz.</div>
         <div class="row"><label>Testere payı <input type="number" id="pKerf" value="4" step="0.5"> mm/kesim</label></div>
         <div class="row"><label>Emniyet payı <input type="number" id="pSafety" value="5" step="1"> mm/çubuk</label></div>
@@ -2794,7 +2794,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   // ---------------------------------------------------------------- çubuk boyları
   // "6500, 5000, 4700" gibi bir metinden stok boyları (büyükten küçüğe, yinelenmeden)
-  const DEFAULT_LENGTHS = [6500, 5000, 4700];
+  const DEFAULT_LENGTHS = [6500, 6000, 5000, 4700];
   function parseLengths(text) {
     const out = [];
     for (const t of String(text == null ? '' : text).split(/[\s,;\/|+]+/)) {
@@ -2899,7 +2899,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // ---------------------------------------------------------------- dosyalar
-  function orderMemory() { return lsGet('panjur.orders', {}); }
+  // Proje bilgileri (müşteri, tarih, not) bellekte tutulur; tarayıcı kaydı varsa oturumlar arasında da hatırlanır.
+  let orderMem = null;
+  function orderMemory() { if (!orderMem) orderMem = lsGet('panjur.orders', {}) || {}; return orderMem; }
   function rememberOrder(f) {
     const m = orderMemory();
     m[f.orderNo] = { customer: f.customer, date: f.date, note: f.note };
@@ -2967,8 +2969,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // ---------------------------------------------------------------- malzeme ayarları
-  function matCfgAll() { return lsGet('panjur.mats', {}); }
-  function matCfgSave(key, cfg) { const all = matCfgAll(); all[key] = cfg; lsSet('panjur.mats', all); }
+  // Parça ayarları BELLEKTE tutulur; tarayıcı kaydı (localStorage) varsa oturumlar arasında da hatırlanır.
+  // Kısıtlı çerçevede (ör. bir portalın sandbox iframe'i) kayıt yoktur. Ayarlar eskiden her çizimde ve
+  // her koşudan önce kayıttan geri okunuyordu; kayıt olmayınca işaretlenen çubuk boyu, kapatılan parça,
+  // demet ve en az grup toplamı anında varsayılana dönüyordu.
+  let matCfgMem = null;
+  function matCfgAll() { if (!matCfgMem) matCfgMem = lsGet('panjur.mats', {}) || {}; return matCfgMem; }
+  function matCfgSave(key, cfg) { matCfgAll()[key] = cfg; lsSet('panjur.mats', matCfgMem); }
   // En az grup toplamı: lamelde çubuk boyunun 250 mm altı (6500 → 6250); diğer parçalarda kural yok (0).
   const MIN_SUM_SLACK = 250;
   function defaultMinSum(m, L) { return m.type === 'lamel' ? Math.max(0, L - MIN_SUM_SLACK) : 0; }
@@ -3488,7 +3495,26 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           const res = await optimizeMaterial(mat, P, 1500, () => {});
           let ls = true;
           try { localStorage.setItem('panjur.deneme', '1'); localStorage.removeItem('panjur.deneme'); } catch (e) { ls = false; }
-          pre.textContent = JSON.stringify({ ok: res.validation.ok, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
+          // Parça ayarları tarayıcı kaydı olmadan da yerinde kalıyor mu? Küçük bir proje yüklenir; bir boy
+          // işaretlenir, adet yazılır, bir parça kapatılır, demet değiştirilir; sonra koşudan önce
+          // yapıldığı gibi parçalar yeniden toplanır.
+          const rowsT = [];
+          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`);
+          await addFiles([new File([rowsT.join('\r\n')], '000000000099999_İmalat.csv')]);
+          const qs = (mi, mk, len) => document.querySelector(`#matList input[data-mi="${mi}"][data-mk="${mk}"]` + (len ? `[data-len="${len}"]` : ''));
+          const fire = (el, set) => { set(el); el.dispatchEvent(new Event('change', { bubbles: true })); };
+          const second = app.mats[0].cfg.opts[1].len;
+          fire(qs(0, 'lenOn', second), el => { el.checked = true; });
+          fire(qs(0, 'lenQty', second), el => { el.value = '7'; });
+          fire(qs(1, 'bundle'), el => { el.value = '3'; });
+          fire(qs(1, 'on'), el => { el.checked = false; });
+          app.mats = collectMaterials();
+          const c0 = app.mats[0].cfg, c1 = app.mats[1].cfg;
+          const settingsKept = c0.lengths.length === 2 && c0.stock[second] === 7 && qs(0, 'lenOn', second).checked === true && c1.bundle === 3 && c1.on === false;
+          for (const m of app.mats) delete matCfgAll()[m.key];      // deneme kayıtlarını geri al
+          lsSet('panjur.mats', matCfgAll());
+          app.files = []; renderFiles();
+          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
         } catch (e) { pre.textContent = 'HATA ' + (e && e.message); }
         // çerçeve içinde (ör. src/test/sandbox.html) koşuyorsa sonucu dış sayfaya bildir
         if (window.parent !== window) window.parent.postMessage({ panjurSelftest: pre.textContent }, '*');
