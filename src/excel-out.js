@@ -1,6 +1,9 @@
 /*
  * Sonuç Excel'i (ExcelJS gerektirir). Satır düzeni elle yapılan örnek dosyayla aynı:
  *   sipariş no · müşteri · POZ · ADET · ÖLÇÜ · not; grubun altında toplam satırı; en sonda KALANLAR.
+ *   Grup içinde satırlar ölçüye göre büyükten küçüğe sıralıdır. Birden fazla stok boyu varsa grubun
+ *   hangi boydan kesileceği başlığında yazar ("GRUP 3 · 5000") ve sayfanın başında boy başına kaç
+ *   çubuk kesileceği verilir ("Çubuk: 6500 × 536 · 5000 × 131 · 4700 × 84").
  *
  * Baskı düzeni: A4 dikey, sayfa başına İKİ SÜTUN (A–F ve G–L). Gruplar gazete sütunu gibi akar:
  * önce sayfanın sol sütunu, sonra sağ sütunu dolar, sonra yeni sayfaya geçilir; hiçbir grup
@@ -79,13 +82,13 @@
   function groupBlock(g, opts) {
     opts = opts || {};
     const rows = [];
-    rows.push({ kind: 'header', A: g.fallback ? `GRUP ${g.no} (yeni çubuk)` : `GRUP ${g.no}` });
-    g.steps.forEach((s, i) => {
+    // Başlık: grup no, (birden fazla stok boyu varsa) kesileceği boy; not sütununda demetteki çubuk sayısı
+    const title = `GRUP ${g.no}` + (opts.multiLen ? ` · ${g.barLen}` : '') + (g.fallback ? ' (yeni çubuk)' : '');
+    rows.push({ kind: 'header', A: title, F: `${g.bars} çubuk` });
+    g.steps.forEach(s => {
       const r = stepRow(s);
-      let note = '';
-      if (i === 0) note = `${g.bars} çubuk`;
-      else if (s.setAside > 0) note = `${s.setAside} kenara → ${s.n}`;
-      rows.push({ kind: 'step', A: r.order, B: r.customer, C: r.poz, D: r.count, E: r.len, F: note });
+      // adedi demetten az olan satır kesilirken aradaki fark kadar çubuk kenarda bekler
+      rows.push({ kind: 'step', A: r.order, B: r.customer, C: r.poz, D: r.count, E: r.len, F: s.setAside > 0 ? `${s.setAside} kenarda` : '' });
     });
     const remnantNote = (g.remnants || []).filter(r => !r.final && r.count > 0).map(r => `${r.count}×${r.len}`).join(', ');
     const adetNote = g.spread ? `adet farkı ${g.spread}` : 'adetler eşit';
@@ -98,7 +101,8 @@
   function kalanBlock(kalan) {
     const rows = [];
     if (!kalan.parts.length) return rows;
-    rows.push({ kind: 'header', A: 'KALANLAR', big: true });
+    // kural açıkken KALANLAR yalnızca listedir; gereken yeni çubuk tahmini başlığın yanında yazar
+    rows.push({ kind: 'header', A: 'KALANLAR', big: true, F: kalan.listOnly && kalan.newBars ? `≈ ${kalan.newBars} çubuk` : '' });
     const src = new Map();
     for (const e of kalan.plan) for (const s of e.steps) {
       const m = src.get(s.part.id) || new Map();
@@ -129,6 +133,7 @@
 
   function buildBlocks(res, opts) {
     const blocks = [];
+    opts = Object.assign({}, opts, { multiLen: ((res.P && res.P.lengths) || []).length > 1 });
     for (const g of res.groups) blocks.push({ rows: groupBlock(g, opts) });
     for (const g of res.kalan.fallbackGroups || []) blocks.push({ rows: groupBlock(g, opts) });
     const kb = kalanBlock(res.kalan);
@@ -142,10 +147,17 @@
   // En uzun içeriğe göre A–D ve F genişlikleri (Excel "karakter" birimi); E (ölçü) sabit.
   function measure(blocks, orders) {
     const m = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+    let title = 0;                          // en uzun grup başlığı (A ve B sütunlarına yayılır)
     for (const b of blocks) for (const row of b.rows) {
+      if (row.kind === 'header') {
+        if (row.F) m.F = Math.max(m.F, String(row.F).length);
+        if (row.A) title = Math.max(title, String(row.A).length * (row.big ? 1.2 : 1));
+        continue;
+      }
       if (row.kind !== 'step' && row.kind !== 'sum') continue;
       for (const k of Object.keys(m)) if (row[k] != null) m[k] = Math.max(m[k], String(row[k]).length);
     }
+    m.T = title;
     for (const o of orders || []) {
       m.A = Math.max(m.A, String(o.orderNo == null ? '' : o.orderNo).length);
       m.B = Math.max(m.B, String(o.customer || '').length);
@@ -155,7 +167,7 @@
   }
   function widthsFor(m) {
     const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-    return [
+    const w = [
       cl(m.A + 1.6, 6.5, 22),            // sipariş no
       cl(m.B + 2, 5, 30),                // müşteri
       cl(m.C + 2.5, 5.5, 44),            // POZ
@@ -163,6 +175,10 @@
       8,                                 // ÖLÇÜ (14 punto kalın, 4 hane + binlik ayırıcı)
       cl(m.F * 0.84 + 1.5, 11, 26),      // not (9 punto)
     ];
+    // grup başlığı ("GRUP 12 · 5000") A + B sütunlarına sığmalı; yoksa POZ başlığında kesilir
+    const need = (m.T || 0) * 0.98 + 1;
+    if (w[0] + w[1] < need) w[1] = Math.min(30, need - w[0]);
+    return w;
   }
 
   // Baskı ölçeği (%, tam sayı): bütün sütunlar kâğıt genişliğine sığacak en büyük ölçek, en çok 100
@@ -269,6 +285,7 @@
         for (const [i, t] of [[3, 'POZ'], [4, 'ADET'], [5, 'ÖLÇÜ']]) {
           const c = ws.getCell(r, col(i)); c.value = t; c.font = { name: FONT, size: 11, bold: true }; c.alignment = { horizontal: 'right' };
         }
+        if (row.F) { const c = ws.getCell(r, col(6)); c.value = row.F; c.font = GRAY; }
       } else if (row.kind === 'step') {
         const vals = [row.A, row.B, row.C, row.D, row.E];
         vals.forEach((v, i) => {
@@ -341,6 +358,14 @@
     }
     ws.pageSetup.scale = scale;
     const cap = rowsPerPage(scale);
+    // 2. satır (sol): stok boyu başına kaç çubuk kesilecek — yazılan grupların toplamı
+    const byLen = (res.stats && res.stats.barsByLen) || {};
+    const lens = Object.keys(byLen).map(Number).sort((a, b) => b - a);
+    if (lens.length) {
+      const c = ws.getCell(2, 1);
+      c.value = 'Çubuk: ' + lens.map(L => `${L} × ${byLen[L]}`).join(' · ');
+      c.font = { name: FONT, size: 11, bold: true };
+    }
     let r0 = 2;                                        // sayfanın ilk içerik satırı
     pages.forEach((pg, i) => {
       if (pg.left.length) writeRows(ws, pg.left, 0, r0 + pg.offL);
@@ -368,29 +393,37 @@
     const ws = wb.addWorksheet('ÖZET');
     plainView(ws, false);
     ws.getColumn(1).width = 26; ws.getColumn(2).width = 12;
-    for (let c = 3; c <= 24; c++) ws.getColumn(c).width = 12;
+    for (let c = 3; c <= 26; c++) ws.getColumn(c).width = 12;
+    ws.getColumn(12).width = 34; ws.getColumn(20).width = 28;
     ws.getCell('A1').value = 'KESİM OPTİMİZASYONU – ÖZET'; ws.getCell('A1').font = { name: FONT, size: 14, bold: true };
     ws.getCell('A2').value = 'Oluşturma: ' + new Date().toLocaleString('tr-TR');
     let r = 4;
-    const hdr = ['Parça', 'Renk', 'Çubuk boyu', 'Demet', 'En az grup toplamı', 'Poz', 'Parça adedi', 'Toplam (m)',
-      'Grup', 'Gruplardaki poz', 'Grup çubuğu', 'Grup firesi %', 'Eşit adetli grup', 'En çok adet farkı', 'Demet bozma',
-      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'Toplam çubuk', 'Alt sınır', 'Toplam fire %', 'Maliyet'];
+    const hdr = ['Parça', 'Renk', 'Çubuk boyları', 'Demet', 'En az grup toplamı', 'Poz', 'Parça adedi', 'Toplam (m)',
+      'Grup', 'Gruplardaki poz', 'Grup çubuğu', 'Boya göre çubuk', 'Grup firesi %', 'Eşit adetli grup', 'En çok adet farkı', 'Demet bozma',
+      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'KALANLAR boya göre', 'Toplam çubuk', 'Malzeme (m)', 'Toplam fire %', 'Maliyet'];
+    const byLenText = o => Object.keys(o || {}).map(Number).sort((a, b) => b - a).map(L => `${L} × ${o[L]}`).join(' · ');
     hdr.forEach((h, i) => { const c = ws.getCell(r, i + 1); c.value = h; c.font = { name: FONT, bold: true }; c.border = BORDER; c.alignment = { wrapText: true, vertical: 'middle' }; });
     ws.getRow(r).height = 30;
     r++;
     for (const x of results) {
       const st = x.result.stats, P = x.result.P;
-      const vals = [x.meta.desc, x.meta.color, P.L, P.maxBundle, P.minSum > 0 ? P.minSum : '–', x.result.items.length, st.pieces, +(st.pieceMm / 1000).toFixed(1),
-        st.groupCount, st.groupPozCount, st.groupBars, +(st.groupWastePct * 100).toFixed(2), st.equalGroups, st.spreadMax, st.groupChanges,
-        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : st.fallbackBars, st.bars, st.lowerBoundBars, +(st.wastePct * 100).toFixed(2), Math.round(st.cost)];
+      const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
+      const writtenBars = Object.values(st.barsByLen || {}).reduce((a, b) => a + b, 0);   // yazılan bütün grupların çubuğu
+      const vals = [x.meta.desc, x.meta.color, Ls.length > 1 ? Ls.join(' / ') : P.L, P.maxBundle,
+        P.minSum > 0 ? (Ls.length > 1 ? Ls.map(L => L - (P.L - P.minSum)).join(' / ') : P.minSum) : '–',
+        x.result.items.length, st.pieces, +(st.pieceMm / 1000).toFixed(1),
+        st.groupCount + (st.listOnly ? 0 : (x.result.kalan.fallbackGroups || []).length), st.groupPozCount, writtenBars, byLenText(st.barsByLen),
+        +(st.groupWastePct * 100).toFixed(2), st.equalGroups, st.spreadMax, st.groupChanges,
+        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : 0, st.listOnly ? byLenText(st.kalanBarsByLen) : '',
+        st.bars, +(st.materialMm / 1000).toFixed(1), +(st.wastePct * 100).toFixed(2), Math.round(st.cost)];
       vals.forEach((v, i) => { const c = ws.getCell(r, i + 1); c.value = v; c.border = BORDER; });
       r++;
     }
     r++;
     const notes = [
-      'Grup çubuğu ve grup firesi yalnızca yazılan grupları kapsar.',
+      'Grup çubuğu ve grup firesi yalnızca yazılan grupları kapsar. Birden fazla çubuk boyu varsa her grup sığdığı en kısa boydan kesilir ("Boya göre çubuk": boy × adet).',
       'KALANLAR çubuğu: artık demetlerinden çıkmayan KALANLAR pozları için gereken yeni çubuk. En az grup toplamı kuralı açıkken tahminidir: her poz kendi başına, bir çubuğa sığdığı kadar kesilirse (bu pozlar için grup yazılmaz).',
-      'Toplam çubuk = grup çubuğu + KALANLAR çubuğu. Alt sınır = toplam parça boyu / çubuk boyu.',
+      'Toplam çubuk = grup çubuğu + KALANLAR çubuğu. Malzeme = çubuk adedi × çubuk boyu toplamı; fire buna göredir.',
     ];
     for (const t of notes) { ws.getCell(r, 1).value = t; ws.getCell(r, 1).font = GRAY; r++; }
     r++;
@@ -399,7 +432,7 @@
     const plist = [['Grup içi en çok adet farkı', P.maxSpread >= 9999 ? 'sınırsız' : P.maxSpread], ['Adet farkı ağırlığı', P.wSpread], ['Testere payı (mm)', P.kerf], ['Emniyet payı (mm)', P.safety], ['Kesim ağırlığı', P.wCut], ['Çubuk ağırlığı', P.wBar], ['Demet bozma ağırlığı', P.wChange], ['KALANLAR poz cezası', P.wKalan], ['Satır düzeni', P.mergeSameLength ? 'aynı ölçüler birleşik' : 'her satır tek poz'], ['Poz aynı grupta bölünebilir', P.multiStep ? 'açık' : 'kapalı'], ['Poz bölme (gruplar arası)', P.allowSplit ? 'açık' : 'kapalı']];
     for (const [k, v] of plist) { ws.getCell(r, 1).value = k; ws.getCell(r, 2).value = v; r++; }
     ws.getCell(r, 1).value = 'En az grup toplamı';
-    ws.getCell(r, 2).value = 'parçaya göre (yukarıdaki tablo): ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR\'a bırakılır';
+    ws.getCell(r, 2).value = 'parçaya göre (yukarıdaki tablo): ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR\'a bırakılır; kısa çubuk boylarında aynı pay geçerlidir';
     r += 2;
     ws.getCell(r, 1).value = 'Siparişler'; ws.getCell(r, 1).font = { name: FONT, bold: true }; r++;
     for (const o of meta.orders) { ws.getCell(r, 1).value = o.orderNo; ws.getCell(r, 2).value = o.customer; if (o.date) { ws.getCell(r, 3).value = o.date; ws.getCell(r, 3).numFmt = 'dd.mm.yyyy'; } ws.getCell(r, 4).value = o.note || ''; r++; }
@@ -450,14 +483,17 @@
 
   function remnantSheet(wb, results) {
     const ws = wb.addWorksheet('ARTIK PLANI');
-    const hdr = ['Parça', 'Kaynak grup', 'Adımdan sonra', 'Artık adet', 'Artık boy', 'Kesim ölçü', 'Adet', 'Poz', 'Sipariş', 'Müşteri'];
-    const widths = [26, 11, 12, 10, 10, 10, 7, 7, 9, 14];
+    const hdr = ['Parça', 'Kaynak grup', 'Artık', 'Artık adet', 'Artık boy', 'Kesim ölçü', 'Adet', 'Poz', 'Sipariş', 'Müşteri'];
+    const widths = [26, 11, 17, 10, 10, 10, 7, 7, 9, 14];
     hdr.forEach((h, i) => { const c = ws.getCell(1, i + 1); c.value = h; c.font = { name: FONT, bold: true }; c.border = BORDER; ws.getColumn(i + 1).width = widths[i]; });
     let r = 2;
     for (const x of results) {
       for (const e of x.result.kalan.plan) {
         for (const s of e.steps) {
-          const vals = [x.meta.desc + (x.meta.color ? ' ' + x.meta.color : ''), `G${e.groupNo}`, e.step, e.count, e.len, s.len, s.n, s.item.poz, s.item.order, s.item.customer];
+          // artık türü: demetin son kalanı mı, yoksa az adetli satırlarda kenarda bekleyen çubuklar mı
+          const src = x.result.groups.find(g => g.no === e.groupNo);
+          const kind = src && e.step === src.steps.length ? 'son kalan' : 'kenarda bekleyen';
+          const vals = [x.meta.desc + (x.meta.color ? ' ' + x.meta.color : ''), `G${e.groupNo}`, kind, e.count, e.len, s.len, s.n, s.item.poz, s.item.order, s.item.customer];
           vals.forEach((v, i) => { const c = ws.getCell(r, i + 1); c.value = (i === 7 || i === 8) && isFinite(Number(v)) ? Number(v) : v; c.border = BORDER; });
           r++;
         }

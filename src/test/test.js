@@ -104,7 +104,7 @@
     check(p15 && p15.ref === 8 && p15.count === 28 && p15.len === 1314, '23876 poz 15: müşteri pozu 8, 28×1314');
     check(p5 && p5.ref === 5 && p5.count === 42 && p5.len === 1884, '23876 poz 5: müşteri pozu 5, 42×1884');
     const kutu185 = real['23876'].materials.find(m => /KUTU KAPAK 185/.test(m.desc));
-    check(kutu185 && kutu185.type === 'diger' && kutu185.known === false && kutu185.defaultOn === false && kutu185.items[0].len === 25000, '23876: "PANJUR KUTU KAPAK 185 MM" tanınmayan parça, 25.000 mm, varsayılan kapalı');
+    check(kutu185 && kutu185.type === 'kutukapak' && kutu185.known === true && kutu185.items[0].len === 25000 && kutu185.label === 'KUTU KAPAK 185', '23876: "PANJUR KUTU KAPAK 185 MM" kutu kapağı olarak tanındı (25.000 mm: çubuktan uzun)');
     check(real['23876'].skipped.some(x => /YAN KAPAK 45/.test(x.desc)) && real['23876'].skipped.some(x => /MOTOR/.test(x.desc)), '23876: ölçüsüz satırlar (yan kapak, motor) atlandı');
     // 24221 — 72 poz, iki ayrı lamel ve iki ayrı alt parça
     const lam24221 = rT('24221', 'lamel');
@@ -218,9 +218,12 @@
 
     const P = Object.assign({}, PanjurOpt.DEFAULTS, { seed: SEED });
     for (const k of ['T0', 'T1', 'wKalan', 'wCut', 'wBar', 'wChange', 'wSpread', 'maxSpread', 'pLNS', 'wFill', 'pElim', 'pFill', 'minSum', 'debug', 'allowSplit', 'mergeSameLength', 'multiStep']) if (q.get(k) != null) P[k] = Number(q.get(k));
+    if (q.get('lengths')) P.lengths = q.get('lengths').split(',').map(Number);
+    // Arayüzün varsayılan stok boyları (örnek Excel üretiminde kullanılır)
+    const UI_LENGTHS = q.get('lengths') ? P.lengths : [6500, 5000, 4700];
     // Adet farkı sınırı olmayan eski model (insan çözümüyle karşılaştırma ve eski birim testleri için)
     // Birim testleri URL ile verilen seçeneklerden etkilenmesin diye kuralları açıkça sabitler.
-    const PL = Object.assign({}, P, { maxSpread: 9999, wSpread: 0, minSum: 0, mergeSameLength: false, multiStep: false, allowSplit: false });
+    const PL = Object.assign({}, P, { maxSpread: 9999, wSpread: 0, minSum: 0, lengths: null, L: 6500, mergeSameLength: false, multiStep: false, allowSplit: false });
     // Eski davranış (aynı ölçü birleştirme + çok adım) yalnızca birim testlerinde açıkça istenir
     const PLm = Object.assign({}, PL, { mergeSameLength: true, multiStep: true });
     check(PanjurOpt.DEFAULTS.mergeSameLength === false && PanjurOpt.DEFAULTS.multiStep === false, 'varsayılan: poz birleştirme ve çok adım kapalı');
@@ -419,6 +422,95 @@
       check(lay.rowsPerPage >= 30 && lay.lastRow <= lay.pages * lay.rowsPerPage + 1, 'Excel: ' + lay.pages + ' sayfa × ' + lay.rowsPerPage + ' satır kapasite, son satır ' + lay.lastRow);
     }
 
+    // ---------------------------------------------------------------- grup içi sıra: ölçü büyükten küçüğe
+    {
+      const PO = Object.assign({}, PanjurOpt.DEFAULTS, { maxSpread: 4, seed: 3 });
+      const its = [mk(1, 46, 1849), mk(2, 43, 2429), mk(3, 46, 859), mk(4, 46, 669), mk(5, 46, 659)];
+      const co = PanjurOpt.compileGroup(PanjurOpt.makeParts(its), PO, null);
+      check(co.feasible && co.steps.map(st => st.len).join() === '2429,1849,859,669,659', 'grup içi sıra ölçüye göre büyükten küçüğe (adedi az olan 2.429 en üstte) → ' + co.steps.map(st => st.len + '×' + st.n).join(' '));
+      check(co.bars === 46 && co.spread === 3 && co.changes === 1 && co.sumLen === 6465 && co.perBar === 6485, 'demet 46 çubuk, adet farkı 3, tek demet bozma, toplam 6465');
+      const fin = co.remnants.find(r => r.final), wait = co.remnants.find(r => !r.final);
+      check(fin.count === 43 && fin.len === 6500 - 6485 && wait.count === 3 && wait.len === fin.len + 2429 + 4, 'kenarda bekleyen 3 çubuk 2.429 kesimini almaz: artık boyu ' + wait.len + ' mm');
+      // satır sırası çubuk kullanımını değiştirmez: adetleri aynı, ölçüleri ters sıralı grup aynı sonucu verir
+      const co2 = PanjurOpt.compileGroup(PanjurOpt.makeParts([mk(1, 43, 659), mk(2, 46, 2429), mk(3, 46, 859), mk(4, 46, 669), mk(5, 46, 1849)]), PO, null);
+      check(co2.bars === 46 && co2.perBar === co.perBar && co2.changes === 1 && co2.steps[co2.steps.length - 1].n === 43, 'adedi az olan en kısa parçaysa en altta kalır, çubuk sayısı aynı');
+      const ro = await PanjurOpt.optimize(its, PO, { iters: 2000, yield: false });
+      check(ro.validation.ok && ro.groups.length === 1 && ro.groups[0].steps.map(st => st.setAside).join() === '3,0,0,0,0', 'sonuç: ilk satır kesilirken 3 çubuk kenarda → ' + ro.groups[0].steps.map(st => st.setAside).join());
+      const blkO = PanjurExcel.groupBlock(ro.groups[0], {});
+      check(blkO[0].A === 'GRUP 1' && blkO[0].F === '46 çubuk' && blkO[1].E === 2429 && blkO[1].F === '3 kenarda' && blkO[2].F === '', 'Excel bloğu: başlıkta "46 çubuk", ilk satır 2.429 ve "3 kenarda"');
+      // büyük gerçek veride de her grup ölçüye göre sıralı (doğrulayıcı bunu ayrıca denetler)
+      const rAll = await PanjurOpt.optimize(eko4.items, Object.assign({}, PO, { maxBundle: 50, minSum: 6250 }), { iters: 20000, yield: false });
+      check(rAll.validation.ok && rAll.groups.every(g => g.steps.every((st, i) => i === 0 || st.len <= g.steps[i - 1].len)), 'dört proje: bütün gruplarda satırlar ölçüye göre büyükten küçüğe');
+    }
+
+    // ---------------------------------------------------------------- birden fazla çubuk boyu (6500 / 5000 / 4700)
+    {
+      const PM = Object.assign({}, PanjurOpt.DEFAULTS, { lengths: [6500, 5000, 4700], L: 6500, seed: 5 });
+      const cg = lens => PanjurOpt.compileGroup(PanjurOpt.makeParts(lens.map((l, i) => mk(i + 1, 40, l))), PM, null);
+      const c47 = cg([1500, 1500, 1600]), c50 = cg([1600, 1600, 1700]), c65 = cg([1700, 1700, 1700]);
+      check(c47.barLen === 4700 && c50.barLen === 5000 && c65.barLen === 6500, 'grup sığdığı en kısa boydan kesilir: 4.612 → 4700, 4.912 → 5000, 5.112 → 6500');
+      check(c47.leftover === 4700 - 4612 && c47.remnants[0].len === 88, 'kalan boy seçilen çubuğa göre: 4700 − 4612 = ' + c47.leftover);
+      check(Math.abs(c47.barUnits - 40 * 4700 / 6500) < 1e-9 && c47.cost < c50.cost && c50.cost < c65.cost, 'çubuk maliyeti boyuyla orantılı (4700 < 5000 < 6500)');
+      check(PanjurOpt.pickBar(PM, 4695) === 4700 && PanjurOpt.pickBar(PM, 4696) === 5000 && PanjurOpt.pickBar(PM, 4996) === 6500 && PanjurOpt.pickBar(Object.assign({}, PM, { lengths: null }), 100) === 6500, 'pickBar sınırları (emniyet payı 5)');
+      // en az grup toplamı: en uzun boyda 6250, kısa boylarda aynı pay (4750 / 4450)
+      const PMs = Object.assign({}, PM, { minSum: 6250 });
+      const run3 = lens => PanjurOpt.optimize(lens.map((l, i) => mk(i + 1, 40, l)), PMs, { iters: 2500, yield: false });
+      const ok47 = await run3([1500, 1500, 1600]), low47 = await run3([1500, 1500, 1300]), low65 = await run3([1700, 1700, 1700]), ok50 = await run3([1600, 1600, 1700]);
+      check(ok47.validation.ok && ok47.groups.length === 1 && ok47.groups[0].barLen === 4700 && JSON.stringify(ok47.stats.barsByLen) === '{"4700":40}', '4.600 toplamlı grup 4700\'lük çubukta geçerli (sınır 4.450): 4700 × 40');
+      check(ok50.validation.ok && ok50.groups.length === 1 && ok50.groups[0].barLen === 5000, '4.900 toplamlı grup 5000\'lik çubukta geçerli (sınır 4.750)');
+      check(low47.validation.ok && low47.groups.length === 0 && low47.kalan.parts.length === 3, '4.300 toplamlı grup 4700\'lük çubukta sınırın (4.450) altında: KALANLAR');
+      check(low65.validation.ok && low65.groups.length === 0 && low65.kalan.parts.length === 3, '5.100 toplamlı grup yalnızca 6500\'lüğe sığar, sınırın (6.250) altında: KALANLAR');
+      // KALANLAR çubuk tahmini en az malzeme harcayan boydan: 1700 mm → 6500'lükten 3 (14 çubuk = 91 m),
+      // 4700'lükten 2 (20 çubuk = 94 m) → 6500 seçilir; 1300 mm → 4700'lükten 3 (14 çubuk = 65,8 m)
+      check(JSON.stringify(low65.stats.kalanBarsByLen) === '{"6500":42}' && low65.stats.kalanNewBars === 42, 'KALANLAR tahmini en az malzemeli boydan: ' + JSON.stringify(low65.stats.kalanBarsByLen));
+      check(JSON.stringify(low47.stats.kalanBarsByLen) === JSON.stringify({ 6500: 30 }) && low47.stats.kalanNewBars === 30, 'KALANLAR tahmini (1.500 ve 1.300 mm, 40 adet): 6500 boyundan 4 parça, 10 + 10 + 10 çubuk → ' + JSON.stringify(low47.stats.kalanBarsByLen));
+      // gerçek veri: üç boyla daha çok poz gruba girer, sayım tutar
+      const it21m = cT.lamel.items.map(i => ({ order: csv.orderNo, customer: 'BİRİNCİ PEN', poz: i.poz, len: i.len, count: i.count }));
+      const r1 = await PanjurOpt.optimize(it21m, Object.assign({}, PanjurOpt.DEFAULTS, { seed: 11, maxBundle: 50, minSum: 6250 }), { iters: Math.min(ITERS, 40000), yield: false });
+      const r3 = await PanjurOpt.optimize(it21m, Object.assign({}, PMs, { seed: 11, maxBundle: 50 }), { iters: Math.min(ITERS, 40000), yield: false });
+      log('  21542 lamel tek boy / üç boy:', { tekBoyGrupPoz: r1.stats.groupPozCount, ucBoyGrupPoz: r3.stats.groupPozCount, boylar: r3.stats.barsByLen, kalan: r3.stats.kalanCount, fire: +(r3.stats.groupWastePct * 100).toFixed(2) });
+      check(r3.validation.ok && r3.groups.every(g => [6500, 5000, 4700].includes(g.barLen) && g.sumLen >= g.barLen - 250 && g.perBar <= g.barLen - 5), 'üç boy 21542: doğrulama temiz, her grup kendi boyunun sınırında (boy − 250 ≤ toplam)');
+      check(Object.values(r3.stats.barsByLen).reduce((a, b) => a + b, 0) === r3.stats.groupBars && r3.groups.reduce((a, g) => a + g.bars * g.barLen, 0) === r3.stats.groupMaterialMm, 'üç boy 21542: boy başına çubuk sayımı gruplarla tutuyor → ' + JSON.stringify(r3.stats.barsByLen));
+      check(r3.stats.groupPozCount >= r1.stats.groupPozCount && r3.stats.groupPozCount >= 152, 'üç boy 21542: gruplardaki poz tek boydan az değil (' + r1.stats.groupPozCount + ' → ' + r3.stats.groupPozCount + ')');
+      check(r3.groups.every((g, i) => i === 0 || g.barLen <= r3.groups[i - 1].barLen), 'üç boy 21542: gruplar çubuk boyuna göre uzundan kısaya sıralı');
+      singlePozCheck(r3, Object.assign({}, PMs, { maxBundle: 50 }), 'üç boy 21542');
+      // kuralsız parça (dikme, demet 2): boy seçimi malzemeyi azaltır
+      const itD = cT.dikme.items.map(i => ({ order: csv.orderNo, customer: 'BİRİNCİ PEN', poz: i.poz, len: i.len, count: i.count }));
+      const d1 = await PanjurOpt.optimize(itD, Object.assign({}, PanjurOpt.DEFAULTS, { seed: 11, maxBundle: 2 }), { iters: 20000, yield: false });
+      const d3 = await PanjurOpt.optimize(itD, Object.assign({}, PM, { seed: 11, maxBundle: 2 }), { iters: 20000, yield: false });
+      log('  21542 dikme tek boy / üç boy:', { tekBoyM: Math.round(d1.stats.materialMm / 1000), ucBoyM: Math.round(d3.stats.materialMm / 1000), boylar: d3.stats.barsByLen });
+      check(d1.validation.ok && d3.validation.ok && d3.stats.kalanCount === 0 && d3.stats.materialMm <= d1.stats.materialMm, 'üç boy dikme: doğrulama temiz, malzeme tek boydan fazla değil (' + Math.round(d1.stats.materialMm / 1000) + ' → ' + Math.round(d3.stats.materialMm / 1000) + ' m)');
+      // Excel: grup başlığında boy, sayfa başında boy başına çubuk
+      const hb = PanjurExcel.groupBlock(r3.groups[0], { multiLen: true });
+      check(hb[0].A === 'GRUP 1 · ' + r3.groups[0].barLen && hb[0].F === r3.groups[0].bars + ' çubuk', 'Excel bloğu: başlıkta stok boyu → "' + hb[0].A + '"');
+      const xb = await PanjurExcel.buildWorkbook([{ result: r3, meta: { desc: cT.lamel.desc, color: cT.lamel.color, sheetName: 'LAMEL', orders: [] }, opts: {} }], { orders: [] });
+      const z3 = XLSX.read(new Uint8Array(xb), { type: 'array', bookFiles: true });
+      const ss = new TextDecoder().decode(new Uint8Array(z3.files['xl/sharedStrings.xml'].content));
+      const want = 'Çubuk: ' + Object.keys(r3.stats.barsByLen).map(Number).sort((a, b) => b - a).map(L => L + ' × ' + r3.stats.barsByLen[L]).join(' · ');
+      check(ss.includes(want) && ss.includes('GRUP 1 · ' + r3.groups[0].barLen), 'Excel: sayfa başında "' + want + '"');
+    }
+
+    // ---------------------------------------------------------------- kutu profilleri ve diğer tanınan parçalar
+    {
+      const kp = PanjurParse.parseBuffer(await fetchBuf('../../örnek projeler/24576 OP.xls'), '24576 OP.xls');
+      const kutular = kp.materials.filter(m => m.type === 'kutu');
+      check(kp.orderNo === '24576' && kp.layout === 'başlıklı' && kp.columns.join('|') === 'poz|stok kodu|açıklama|renk|adet|ölçü', '24576 (kutulu örnek) okundu: ' + kp.columns.join(' · '));
+      check(kutular.length === 4 && kutular.every(m => m.known && m.defaultOn && m.defaultBundle === 1 && m.items.length === 2 && m.color === 'ALTINMEŞE'), '24576: dört kutu profili tanındı (varsayılan açık, tek tek kesim)');
+      check(kutular.map(m => m.label).sort().join(' | ') === 'KUTU SK-165/AR 90 | KUTU SK-165/ÖN 45 | KUTU SK-205/AR 90 | KUTU SK-205/ÖN 45', '24576 kutu etiketleri: ' + kutular.map(m => m.label).sort().join(' | '));
+      const k165 = kutular.find(m => m.desc === 'SK-165/ÖN 45 KUTU');
+      check(k165.stokCodes.join() === 'BAR.F.45.A40.165' && k165.items.map(i => i.len).sort((a, b) => a - b).join() === '1010,1930' && kp.warnings.length === 2, '24576 SK-165/ÖN 45: 1.010 (tarih bozulması düzeltildi) ve 1.930');
+      check(kp.materials.filter(m => !m.known).length === 0, '24576: tanınmayan ölçülü parça yok → ' + kp.materials.filter(m => !m.known).map(m => m.desc).join(', '));
+      const ty = d => PanjurParse.typeOf(d).type;
+      check(ty('SK-180/AR 90 KUTU') === 'kutu' && ty('KUTU BİTİŞ ALÜMİNYUM') === 'kutu' && ty('PANJUR KUTU KAPAK 220 MM') === 'kutukapak' && ty('PANJUR KUTU ALT KAPAK 220 MM') === 'kutukapak', 'tür: kutu ve kutu kapak');
+      check(ty('KÖŞEBENT 20*40') === 'kosebent' && ty('PANO U 17*17') === 'pano' && ty("STRAFOR 220'LİK") === 'strafor' && PanjurParse.typeOf("STRAFOR 220'LİK").on === false, 'tür: köşebent, pano U (açık), strafor (kapalı)');
+      check(ty('AS 55 EKO ALÜMINYUM LAMEL') === 'lamel' && ty('DİKMELİ U 62 LIK') === 'dikme' && ty('ALT PARÇA-55D  K.SİZ') === 'altparca' && ty('TAPA SL-56') === 'diger' && ty("165MM YAN KAPAK 45'") === 'diger', 'tür: eski türler bozulmadı');
+      check(merged4.filter(m => !m.known).length === 0 && merged4.some(m => m.type === 'kutukapak') && merged4.some(m => m.type === 'strafor' && !m.defaultOn), 'dört proje: tanınmayan parça kalmadı (kutu kapakları ve strafor tanınıyor)');
+      // kutu optimizasyonu: 1.010 + 1.930 tek çubukta, sığdığı en kısa boydan
+      const mk165 = PanjurParse.mergeProjects([{ orderNo: kp.orderNo, customer: '', date: '', note: '', parsed: kp }]).find(m => m.desc === 'SK-165/ÖN 45 KUTU');
+      const rk = await PanjurOpt.optimize(mk165.items, Object.assign({}, PanjurOpt.DEFAULTS, { lengths: [6500, 5000, 4700], maxBundle: 1 }), { iters: 2000, yield: false });
+      check(rk.validation.ok && rk.groups.length === 1 && rk.groups[0].barLen === 4700 && rk.groups[0].steps.map(st => st.len).join() === '1930,1010' && JSON.stringify(rk.stats.barsByLen) === '{"4700":1}', 'kutu: 1.930 + 1.010 tek 4700\'lük çubuktan');
+    }
+
     // ---------------------------------------------------------------- optimize lamel
     if (!ONLY || ONLY === 'lamel') {
       const t0 = performance.now();
@@ -489,7 +581,7 @@
         const m = cT[type];
         if (!m) continue;
         const items = m.items.map(i => ({ order: Number(csv.orderNo), customer: orders[0].customer, poz: i.poz, len: i.len, count: i.count }));
-        const Pm = Object.assign({}, P, { maxBundle: m.defaultBundle, minSum: q.get('minSum') != null ? P.minSum : (type === 'lamel' ? P.L - 250 : 0) });
+        const Pm = Object.assign({}, P, { maxBundle: m.defaultBundle, lengths: UI_LENGTHS, minSum: q.get('minSum') != null ? P.minSum : (type === 'lamel' ? P.L - 250 : 0) });
         const res = await PanjurOpt.optimize(items, Pm, { iters: ITERS, yield: false });
         check(res.validation.ok, type + ' doğrulama: ' + (res.validation.errors.slice(0, 3).join(' | ') || 'temiz'));
         log('  ' + m.typeLabel + ':', { cost: Math.round(res.stats.cost), bars: res.stats.bars, lb: res.stats.lowerBoundBars, strokes: res.stats.strokes, changes: res.stats.changes, equal: res.stats.equalGroups + '/' + res.stats.groupCount, spreadMax: res.stats.spreadMax, kalan: res.stats.kalanCount, fire: +(res.stats.wastePct * 100).toFixed(2) });
@@ -520,13 +612,13 @@
       const allOrders = realFiles.map(f => ({ orderNo: Number(f.orderNo), customer: f.customer, date: f.date ? new Date(f.date + 'T00:00:00Z') : null, pozCount: f.parsed.pozCount, note: f.note }));
       for (const m of merged4.filter(x => x.defaultOn)) {
         // arayüzün varsayılanı: lamelde en az grup toplamı = çubuk boyu − 250 (6250)
-        const Pm = Object.assign({}, P, { maxBundle: m.defaultBundle, minSum: q.get('minSum') != null ? P.minSum : (m.type === 'lamel' ? P.L - 250 : 0) });
+        const Pm = Object.assign({}, P, { maxBundle: m.defaultBundle, lengths: UI_LENGTHS, minSum: q.get('minSum') != null ? P.minSum : (m.type === 'lamel' ? P.L - 250 : 0) });
         const itN = Math.max(8000, Math.round(ITERS * Math.max(0.15, Math.min(m.defaultBundle <= 2 ? 1 : 4, m.items.length / 150))));
         const res = await PanjurOpt.optimize(m.items, Pm, { iters: itN, yield: false });
         const st = res.stats;
         check(res.validation.ok, m.label + ' doğrulama: ' + (res.validation.errors.slice(0, 2).join(' | ') || 'temiz'));
         singlePozCheck(res, Pm, m.label);
-        log('  ' + m.label + ':', { poz: m.pozCount, proje: m.orders.length, grup: st.groupCount, grupPoz: st.groupPozCount, grupCubuk: st.groupBars, grupFire: +(st.groupWastePct * 100).toFixed(1), equal: st.equalGroups + '/' + st.groupCount, spreadMax: st.spreadMax, kalan: st.kalanCount, kalanCubuk: st.listOnly ? st.kalanNewBars : st.fallbackBars, bars: st.bars, lb: st.lowerBoundBars, fire: +(st.wastePct * 100).toFixed(1) });
+        log('  ' + m.label + ':', { poz: m.pozCount, proje: m.orders.length, grup: st.groupCount, grupPoz: st.groupPozCount, grupCubuk: st.groupBars, grupFire: +(st.groupWastePct * 100).toFixed(1), equal: st.equalGroups + '/' + st.groupCount, spreadMax: st.spreadMax, kalan: st.kalanCount, kalanCubuk: st.listOnly ? st.kalanNewBars : st.fallbackBars, bars: st.bars, boylar: st.barsByLen, fire: +(st.wastePct * 100).toFixed(1) });
         const orders = m.orders.map(o => ({ orderNo: Number(o.orderNo), customer: o.customer, date: o.date ? new Date(o.date + 'T00:00:00Z') : null, pozCount: o.pozCount, note: o.note }));
         results.push({ result: res, meta: { desc: m.desc, color: m.color, sheetName: m.label, orders }, opts: {} });
       }

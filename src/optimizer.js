@@ -2,10 +2,13 @@
  * Panjur kesim optimizasyonu — çekirdek motor
  * -------------------------------------------
  * Model:
- *   - Bir "grup" bir demetle yapılan sıralı kesimlerdir. Demet, gruptaki en büyük
- *     adımın adediyle başlar (≤ maxBundle) ve her adımda yalnızca küçülür; böylece
- *     her adımda aktif çubukların kalan boyu aynıdır. Küçülürken kenara ayrılan
- *     çubuklar aynı boyda "artık demetleri" oluşturur.
+ *   - Bir "grup" bir demetle yapılan sıralı kesimlerdir. Demet, gruptaki en büyük adet kadar
+ *     çubukla açılır (≤ maxBundle). Satırlar ÖLÇÜYE göre büyükten küçüğe kesilir (usta uzun
+ *     parçayı önce keser); adedi daha az olan satırda aradaki fark kadar çubuk kenarda bekler
+ *     (hep aynı çubuklar). Bekleyen çubuklar o kesimi almadığı için boyları uzun kalır ve aynı
+ *     boyda "artık demetleri" oluşturur. Satır sırası çubuk kullanımını değiştirmez.
+ *   - Stok boyları (lengths): birden fazla çubuk boyu varsa (ör. 6500, 5000, 4700) her grup
+ *     sığdığı EN KISA boydan kesilir; çubuk maliyeti boyuyla orantılıdır. P.L en uzun boydur.
  *   - Adım = bir satır = TEK POZ (ölçü, adet). Varsayılan: her poz tam adediyle tek satır,
  *     tek kesim. İstenirse aynı poz aynı grupta birden çok satıra bölünebilir (multiStep);
  *     aynı ölçüdeki pozları tek kesimde birleştirme (mergeSameLength) iptal edildi, kapalı.
@@ -16,6 +19,8 @@
  *     (en büyük − en küçük ≤ maxSpread; ideal 0, yani hepsi eşit).
  *   - En az grup toplamı (minSum; lamelde 6500'lük çubuk için 6250): ölçüleri toplamı bunun
  *     altında kalan grup "optimizasyon" sayılmaz ve YAZILMAZ; pozları KALANLAR'a bırakılır.
+ *     minSum en uzun boy içindir; daha kısa boydan kesilen grupta aynı pay geçerlidir
+ *     (6500 → 6250 ise 5000 → 4750, 4700 → 4450).
  *     Bu kural açıkken KALANLAR için yeni çubuk grupları da yazılmaz (yalnızca liste verilir,
  *     gereken çubuk tahmini raporlanır) ve arama, olabildiğince çok pozu toplamı
  *     minSum … (boy − emniyet − kesim payları) penceresine oturan gruplara yerleştirmeye çalışır.
@@ -30,7 +35,8 @@
   'use strict';
 
   const DEFAULTS = Object.freeze({
-    L: 6500,          // çubuk boyu (mm)
+    L: 6500,          // çubuk boyu (mm); lengths verilirse en uzun stok boyu
+    lengths: null,    // stok boyları (mm), ör. [6500, 5000, 4700]; verilmezse yalnızca L
     kerf: 4,          // testere payı (mm / kesim)
     safety: 5,        // emniyet payı (mm / çubuk)
     maxBundle: 50,    // tek seferde kesilebilecek en fazla parça
@@ -64,8 +70,8 @@
     };
   }
 
-  const INFEASIBLE = Object.freeze({ feasible: false, cost: Infinity, steps: [], bars: 0, strokes: 0, changes: 0, spread: 0, remnants: [], perBar: Infinity, sumLen: 0, cands: [] });
-  const EMPTY = Object.freeze({ feasible: true, cost: 0, steps: [], bars: 0, strokes: 0, changes: 0, spread: 0, remnants: [], perBar: 0, sumLen: 0, leftover: 0, n: 0, cands: [] });
+  const INFEASIBLE = Object.freeze({ feasible: false, cost: Infinity, steps: [], bars: 0, strokes: 0, changes: 0, spread: 0, remnants: [], perBar: Infinity, sumLen: 0, barLen: 0, barUnits: 0, cands: [] });
+  const EMPTY = Object.freeze({ feasible: true, cost: 0, steps: [], bars: 0, strokes: 0, changes: 0, spread: 0, remnants: [], perBar: 0, sumLen: 0, barLen: 0, barUnits: 0, leftover: 0, n: 0, cands: [] });
 
   // ---------------------------------------------------------------- grup derleyici
 
@@ -129,6 +135,18 @@
     return allocs;
   }
 
+  // Grubun sığdığı en kısa stok boyu (birden fazla çubuk boyu tanımlıysa); yoksa P.L
+  function pickBar(P, perBar) {
+    const Ls = P.lengths;
+    if (!Ls || Ls.length < 2) return P.L;
+    let best = P.L;
+    for (let i = 0; i < Ls.length; i++) if (Ls[i] < best && perBar <= Ls[i] - P.safety) best = Ls[i];
+    return best;
+  }
+  // En az grup toplamı kuralına takılıyor mu? Sınır, grubun kesildiği boya göredir:
+  // en uzun boyda minSum, kısa boylarda aynı pay (boy − (P.L − minSum)).
+  function isLowComp(P, c) { return P.minSum > 0 && c.sumLen < c.barLen - (P.L - P.minSum); }
+
   function compileWithN(keys, n, P, cap) {
     const steps = [];
     let perBar = 0;
@@ -143,26 +161,40 @@
         steps.push({ len: k.len, n: c, alloc });
       }
     }
-    steps.sort((a, b) => b.n - a.n || b.len - a.len);
-    const bars = steps[0].n;
-    // Adet farkı: gruptaki en kalabalık ve en az kesimin adet farkı. İdeal 0 (hepsi eşit).
-    const spread = bars - steps[steps.length - 1].n;
-    if (spread > P.maxSpread) return null;
-    let changes = 0, used = 0, sumLen = 0;
-    const remnants = [];
+    // Satır sırası: ölçüsü büyük olandan küçüğe; eşit ölçüde adedi çok olan önce.
+    steps.sort((a, b) => b.len - a.len || b.n - a.n);
+    let bars = 0, minN = Infinity, sumLen = 0, changes = 0;
     for (let i = 0; i < steps.length; i++) {
-      if (i > 0 && steps[i].n < steps[i - 1].n) {
-        changes++;
-        remnants.push({ count: steps[i - 1].n - steps[i].n, len: P.L - used, afterStep: i });
-      }
-      used += steps[i].len + P.kerf;
-      sumLen += steps[i].len;
+      const st = steps[i];
+      if (st.n > bars) bars = st.n;
+      if (st.n < minN) minN = st.n;
+      sumLen += st.len;
+      if (i > 0 && st.n !== steps[i - 1].n) changes++;     // demet bozma: adedin değiştiği her geçiş
     }
-    const leftover = P.L - used;
-    remnants.push({ count: steps[steps.length - 1].n, len: leftover, afterStep: steps.length, final: true });
-    const cost = P.wCut * steps.length + P.wBar * bars + P.wChange * changes + (P.wSpread || 0) * spread;
+    // Adet farkı: gruptaki en kalabalık ve en az kesimin adet farkı. İdeal 0 (hepsi eşit).
+    const spread = bars - minN;
+    if (spread > P.maxSpread) return null;
+    const barLen = pickBar(P, perBar);
+    // Artıklar: adet düzeyi v olan çubuklar yalnızca adedi ≥ v olan satırlarda kesilir; daha az
+    // adetli satırlarda kenarda bekledikleri için boyları uzun kalır.
+    const remnants = [];
+    if (spread > 0) {
+      const levels = [];
+      for (const st of steps) if (levels.indexOf(st.n) < 0) levels.push(st.n);
+      levels.sort((a, b) => b - a);
+      for (let j = 0; j < levels.length - 1; j++) {
+        let used = 0;
+        for (const st of steps) if (st.n >= levels[j]) used += st.len + P.kerf;
+        remnants.push({ count: levels[j] - levels[j + 1], len: barLen - used, afterStep: j + 1 });
+      }
+    }
+    const leftover = barLen - perBar;
+    remnants.push({ count: minN, len: leftover, afterStep: steps.length, final: true });
+    // Çubuk maliyeti boyuyla orantılıdır (kısa stok boyu daha ucuz); P.L en uzun boy
+    const barUnits = bars * barLen / P.L;
+    const cost = P.wCut * steps.length + P.wBar * barUnits + P.wChange * changes + (P.wSpread || 0) * spread;
     // sumLen: satırların ölçü toplamı (Excel'deki toplam satırı); minSum kuralı buna bakar
-    return { feasible: true, n, steps, bars, strokes: steps.length, changes, spread, remnants, perBar, sumLen, leftover, cost };
+    return { feasible: true, n, steps, bars, strokes: steps.length, changes, spread, remnants, perBar, sumLen, leftover, barLen, barUnits, cost };
   }
 
   /** Poz kümesi için en iyi kesim planı. nPref verilirse yalnızca o demet boyu denenir. */
@@ -285,9 +317,12 @@
       if (best && bestDelta <= alone.cost) { best.g.parts.push(p); best.g.comp = best.c; }
       else groups.push({ parts: [p], comp: alone, nPref: null });
     }
-    let bars = 0, strokes = 0, changes = 0, cost = 0;
-    for (const g of groups) { bars += g.comp.bars; strokes += g.comp.strokes; changes += g.comp.changes; cost += g.comp.cost; }
-    return { groups, bars, strokes, changes, cost };
+    let bars = 0, strokes = 0, changes = 0, cost = 0, barUnits = 0, matMm = 0;
+    for (const g of groups) {
+      bars += g.comp.bars; strokes += g.comp.strokes; changes += g.comp.changes; cost += g.comp.cost;
+      barUnits += g.comp.barUnits; matMm += g.comp.bars * g.comp.barLen;
+    }
+    return { groups, bars, strokes, changes, cost, barUnits, matMm };
   }
 
   // ---------------------------------------------------------------- durum ve değerlendirme
@@ -322,7 +357,7 @@
     }
     // minSum kuralı açıkken toplamı sınırın altında kalan gruplar "grup" sayılmaz: pozları
     // KALANLAR gibi değerlendirilir (aramada bu gruplar pozların biriktiği bekleme alanıdır).
-    isLow(g) { return this.P.minSum > 0 && g.parts.length > 0 && g.comp.sumLen < this.P.minSum; }
+    isLow(g) { return g.parts.length > 0 && isLowComp(this.P, g.comp); }
     /** KALANLAR + (minSum açıkken) sınırın altındaki grupların pozları */
     freeParts() {
       const out = this.kalanParts();
@@ -331,7 +366,7 @@
     }
     evaluate() {
       const P = this.P, ms = P.minSum > 0;
-      let cost = 0, bars = 0, strokes = 0, changes = 0;
+      let cost = 0, bars = 0, strokes = 0, changes = 0, barUnits = 0, matMm = 0;
       const pool = [];
       const kal = this.kalanParts();
       for (let gi = 0; gi < this.groups.length; gi++) {
@@ -339,8 +374,9 @@
         if (g.parts.length === 0) continue;
         const c = g.comp;
         if (!c.feasible) return { cost: Infinity };
-        if (ms && c.sumLen < P.minSum) { for (const p of g.parts) kal.push(p); continue; }
+        if (ms && isLowComp(P, c)) { for (const p of g.parts) kal.push(p); continue; }
         cost += c.cost; bars += c.bars; strokes += c.strokes; changes += c.changes;
+        barUnits += c.barUnits; matMm += c.bars * c.barLen;
         for (const r of c.remnants) if (r.count > 0 && r.len > 0) pool.push({ count: r.count, len: r.len, group: gi, step: r.afterStep });
       }
       const kp = planKalan(kal, pool, P, ms);
@@ -353,18 +389,20 @@
           const g = this.groups[gi];
           if (!g.parts.length) continue;
           const c = g.comp;
-          if (ms && c.sumLen < P.minSum) continue;
+          if (ms && isLowComp(P, c)) continue;
           if (usedFinal.has(gi + ':' + c.steps.length)) continue;
           const f = c.leftover / P.L;
           cost -= P.wFill * c.remnants[c.remnants.length - 1].count * f * f;
         }
       }
       const fbBars = kp.fallback ? kp.fallback.bars : kp.estBars;
+      const fbUnits = kp.fallback ? kp.fallback.barUnits : kp.estBars;
+      const fbMm = kp.fallback ? kp.fallback.matMm : kp.estBars * P.L;
       const fbStrokes = kp.fallback ? kp.fallback.strokes : 0;
       const fbChanges = kp.fallback ? kp.fallback.changes : 0;
-      const material = (bars + fbBars) * P.L;
-      cost += P.wWaste * (material - this.totalPieceMm);
-      return { cost, bars: bars + fbBars, strokes: strokes + kp.strokes + fbStrokes, changes: changes + kp.changes + fbChanges, kp, kal, groupBars: bars, groupStrokes: strokes, groupChanges: changes };
+      cost += P.wWaste * (matMm + fbMm - this.totalPieceMm);
+      return { cost, bars: bars + fbBars, barUnits: barUnits + fbUnits, matMm: matMm + fbMm, strokes: strokes + kp.strokes + fbStrokes, changes: changes + kp.changes + fbChanges, kp, kal,
+        groupBars: bars, groupBarUnits: barUnits, groupMatMm: matMm, groupStrokes: strokes, groupChanges: changes };
     }
     snapshot() {
       const s = { loc: new Map(this.loc), nPref: this.groups.map(g => g.nPref), cost: this.cost };
@@ -458,7 +496,11 @@
    * Dönüş: { parts, gain } ya da null.
    */
   function bestFill(P, seeds, cands, limit, rng) {
-    const cap = P.L - P.safety, kerf = P.kerf, minSum = P.minSum;
+    const cap = P.L - P.safety, kerf = P.kerf;
+    const slack = P.L - P.minSum;                     // her boyda izin verilen en çok açık (boy − toplam)
+    const Ls = (P.lengths && P.lengths.length ? P.lengths : [P.L]).slice().sort((a, b) => a - b);
+    // çubuk başı boy (testere payları dahil) per olan grubun sığdığı en kısa stok boyu
+    const need = per => { for (let i = 0; i < Ls.length; i++) if (per <= Ls[i] - P.safety) return Ls[i]; return P.L; };
     const S = P.maxSpread == null ? 9999 : P.maxSpread;
     const exact = P.mergeSameLength || P.multiStep;   // satır sayısı poz sayısına eşit değilse tam derleme gerekir
     let sum0 = 0, per0 = 0, lo0 = Infinity, hi0 = -Infinity, kc0 = 0;
@@ -483,28 +525,31 @@
     for (let i = n - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + list[i].item.len;
     const chosen = [], counts = [];
     let best = null, bestGain = 1e-9, nodes = 0;
-    const score = (lo, hi, kc) => {
+    const score = (lo, hi, kc, barLen) => {
       const parts = seeds.concat(chosen);
       let cost;
       if (exact) {
         const c = compileGroup(parts, P, null);
-        if (!c.feasible || c.sumLen < minSum) return;
+        if (!c.feasible || isLowComp(P, c)) return;
         cost = c.cost;
       } else {
-        // her poz tek satır: çubuk = en büyük adet, demet bozma = farklı adet sayısı − 1
+        // her poz tek satır: çubuk = en büyük adet (boyuyla orantılı), demet bozma ≥ farklı adet sayısı − 1
         counts.length = 0;
         for (const q of parts) if (counts.indexOf(q.count) < 0) counts.push(q.count);
-        cost = P.wCut * parts.length + P.wBar * hi + P.wChange * (counts.length - 1) + (P.wSpread || 0) * (hi - lo);
+        cost = P.wCut * parts.length + P.wBar * hi * barLen / P.L + P.wChange * (counts.length - 1) + (P.wSpread || 0) * (hi - lo);
       }
       if (kc - cost > bestGain) { bestGain = kc - cost; best = parts; }
     };
     const dfs = (i, sum, per, lo, hi, kc) => {
       if (nodes++ > limit) return;
-      if (sum >= minSum) score(lo, hi, kc);
+      // Bu pozlar en az barLen boyunda çubuk ister; poz eklendikçe gereken boy ancak büyür.
+      // Geçerli olmak için toplam en az (boy − pay) olmalı.
+      const barLen = need(per), minSum = barLen - slack;
+      if (sum >= minSum) score(lo, hi, kc, barLen);
       const room = cap - per;
       for (let j = i; j < n; j++) {
         if (nodes > limit) return;
-        if (sum + Math.min(room, suffix[j]) < minSum) return;   // kalan adaylarla pencereye ulaşılamaz
+        if (sum + Math.min(room, suffix[j]) < minSum) return;   // kalan adaylarla hiçbir pencereye ulaşılamaz
         const q = list[j], u = q.item.len + kerf;
         if (u > room) continue;
         const nlo = q.count < lo ? q.count : lo, nhi = q.count > hi ? q.count : hi;
@@ -543,7 +588,7 @@
       const r = bestFill(P, [seed], cands, limit, randomize ? rng : null);
       if (!r) continue;
       const comp = compileGroup(r.parts, P, null);
-      if (!comp.feasible || comp.sumLen < P.minSum) continue;
+      if (!comp.feasible || isLowComp(P, comp)) continue;
       const gi = state.newGroupIndex(), g = state.groups[gi];
       g.parts = r.parts.slice(); g.comp = comp; g.nPref = null;
       for (const q of r.parts) { state.loc.set(q.id, gi); used.add(q.id); }
@@ -918,61 +963,69 @@
     const order = [];
     // minSum açıkken toplamı sınırın altında kalan gruplar yazılmaz (pozları KALANLAR'dadır: ev.kal)
     for (let gi = 0; gi < state.groups.length; gi++) if (state.groups[gi].parts.length && !state.isLow(state.groups[gi])) order.push(gi);
-    // sıralama: demet büyükten küçüğe, sonra ilk adım ölçüsü uzundan kısaya
+    // sıralama: çubuk boyu uzundan kısaya, demet büyükten küçüğe, sonra en uzun ölçü uzundan kısaya
     order.sort((a, b) => {
       const ca = state.groups[a].comp, cb = state.groups[b].comp;
-      return cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
+      return cb.barLen - ca.barLen || cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
     });
     const gIndexOf = new Map();
     order.forEach((gi, i) => gIndexOf.set(gi, i + 1));
+    // setAside: bu satır kesilirken kenarda bekleyen çubuk sayısı (demet − satırın adedi)
+    const mapSteps = c => c.steps.map(st => ({
+      len: st.len, n: st.n,
+      alloc: st.alloc.map(a => ({ part: a.part, item: a.part.item, count: a.count })),
+      setAside: c.bars - st.n,
+    }));
     for (const gi of order) {
-      const g = state.groups[gi];
-      const c = g.comp;
-      let sumLen = 0;
-      const steps = c.steps.map((s, i) => {
-        sumLen += s.len;
-        const prevN = i === 0 ? null : c.steps[i - 1].n;
-        return {
-          len: s.len, n: s.n,
-          alloc: s.alloc.map(a => ({ part: a.part, item: a.part.item, count: a.count })),
-          setAside: prevN !== null && s.n < prevN ? prevN - s.n : 0,
-        };
-      });
+      const c = state.groups[gi].comp;
       groups.push({
-        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
-        perBar: c.perBar, sumLen, leftover: c.leftover, steps,
+        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, barLen: c.barLen, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
+        perBar: c.perBar, sumLen: c.sumLen, leftover: c.leftover, steps: mapSteps(c),
         remnants: c.remnants.filter(r => r.count > 0 && r.len > 0),
       });
     }
     const kp = ev.kp;
     const kalanParts = ev.kal.slice().sort((a, b) => b.item.len - a.item.len || b.count - a.count || a.id - b.id);
     // minSum açıkken artıktan çıkmayan KALANLAR için grup yazılmaz. Gereken yeni çubuk şöyle
-    // tahmin edilir: her poz kendi başına, bir çubuğa sığdığı kadar kesilir (2998 mm → çubuktan 2,
-    // 1994 mm → 3). Usta farklı pozları aynı çubukta birleştirirse daha az tutar.
-    let estBars = 0;
+    // tahmin edilir: her poz kendi başına, bir çubuğa sığdığı kadar kesilir (2998 mm → 6500'lük
+    // çubuktan 2); birden fazla stok boyu varsa en az malzeme harcayan boy seçilir. Usta farklı
+    // pozları aynı çubukta birleştirirse daha az tutar.
+    const estByLen = {};
+    let estBars = 0, estMm = 0;
     if (ms) {
       for (const d of kp.deficit) {
-        const perBar = Math.max(1, Math.floor((P.L - P.safety) / (d.item.len + P.kerf)));
-        estBars += Math.ceil(d.count / perBar);
+        let bL = P.L, bBars = 0, bMm = Infinity;
+        for (const L of P.lengths || [P.L]) {
+          const per = Math.floor((L - P.safety) / (d.item.len + P.kerf));
+          if (per < 1) continue;
+          const nb = Math.ceil(d.count / per);
+          if (nb * L < bMm) { bMm = nb * L; bBars = nb; bL = L; }
+        }
+        if (!bBars) continue;
+        estBars += bBars; estMm += bMm; estByLen[bL] = (estByLen[bL] || 0) + bBars;
       }
     }
+    const fbGroups = kp.fallback ? kp.fallback.groups.map((g, i) => ({
+      no: groups.length + i + 1, bars: g.comp.bars, barLen: g.comp.barLen, strokes: g.comp.strokes, changes: g.comp.changes, spread: g.comp.spread || 0, perBar: g.comp.perBar,
+      sumLen: g.comp.sumLen, leftover: g.comp.leftover, fallback: true,
+      steps: mapSteps(g.comp),
+      remnants: [],
+    })) : [];
+    const fbByLen = {};
+    for (const g of fbGroups) fbByLen[g.barLen] = (fbByLen[g.barLen] || 0) + g.bars;
     const kalan = {
       parts: kalanParts.map(p => ({ part: p, item: p.item, count: p.count })),
       plan: kp.plan.map(e => ({
         groupNo: gIndexOf.get(e.bundle.group), step: e.bundle.step, count: e.bundle.count, len: e.bundle.len, derived: !!e.bundle.derived,
-        steps: e.steps.map(s => ({ len: s.len, n: s.n, item: s.part.item, part: s.part })),
+        steps: e.steps.map(st => ({ len: st.len, n: st.n, item: st.part.item, part: st.part })),
         leftoverCount: e.leftoverCount, leftoverLen: e.leftoverLen,
       })),
       strokes: kp.strokes, changes: kp.changes, usedMm: kp.usedMm,
       deficit: kp.deficit.map(d => ({ item: d.item, count: d.count, part: d.origin })),
       listOnly: ms,                       // true: KALANLAR yalnızca listedir, yeni çubuk grupları yazılmaz
       newBars: ms ? estBars : (kp.fallback ? kp.fallback.bars : 0),     // artıktan çıkmayanlar için (kural açıkken tahmini) yeni çubuk
-      fallbackGroups: kp.fallback ? kp.fallback.groups.map((g, i) => ({
-        no: groups.length + i + 1, bars: g.comp.bars, strokes: g.comp.strokes, changes: g.comp.changes, spread: g.comp.spread || 0, perBar: g.comp.perBar,
-        sumLen: g.comp.steps.reduce((s, x) => s + x.len, 0), leftover: g.comp.leftover, fallback: true,
-        steps: g.comp.steps.map((s, i2) => ({ len: s.len, n: s.n, alloc: s.alloc.map(a => ({ part: a.part, item: a.part.item, count: a.count })), setAside: i2 > 0 && s.n < g.comp.steps[i2 - 1].n ? g.comp.steps[i2 - 1].n - s.n : 0 })),
-        remnants: [],
-      })) : [],
+      newBarsByLen: ms ? estByLen : fbByLen,                             // aynısı, stok boyuna göre
+      fallbackGroups: fbGroups,
     };
     let pieces = 0;
     for (const p of state.parts) pieces += p.count;
@@ -982,26 +1035,29 @@
     for (const g of groups) for (const st of g.steps) { groupPieceMm += st.n * st.len; groupPieces += st.n; }
     let kalanPieces = 0, kalanMm = 0;
     for (const p of kalanParts) { kalanPieces += p.count; kalanMm += p.count * p.item.len; }
-    // Toplam çubuk: gruplar + KALANLAR için gereken yeni çubuk (minSum açıkken tahmini)
-    const totalBars = ms ? ev.groupBars + kalan.newBars : ev.bars;
+    const allG = groups.concat(fbGroups);
+    // Yazılan grupların çubukları, stok boyuna göre ("şu boydan şu kadar kesilecek")
+    const barsByLen = {};
+    for (const g of allG) barsByLen[g.barLen] = (barsByLen[g.barLen] || 0) + g.bars;
+    const groupMaterialMm = ev.groupMatMm;
+    // Toplam: gruplar + KALANLAR için gereken yeni çubuk (minSum açıkken tahmini)
+    const totalBars = ev.groupBars + kalan.newBars;
     const totalStrokes = ms ? ev.groupStrokes + kp.strokes + kp.deficit.length : ev.strokes;
-    const materialMm = totalBars * P.L;
+    const materialMm = groupMaterialMm + (ms ? estMm : (kp.fallback ? kp.fallback.matMm : 0));
     let cutPart, barPart, chgPart, kalanPart;
     if (ms) {
       // KALANLAR'ın bütün maliyeti (poz cezası + artık kesimleri + tahmini çubuk payı) tek kalemde
-      cutPart = P.wCut * ev.groupStrokes; barPart = P.wBar * ev.groupBars; chgPart = P.wChange * ev.groupChanges; kalanPart = kp.cost;
+      cutPart = P.wCut * ev.groupStrokes; barPart = P.wBar * ev.groupBarUnits; chgPart = P.wChange * ev.groupChanges; kalanPart = kp.cost;
     } else {
-      cutPart = P.wCut * ev.strokes; barPart = P.wBar * ev.bars; chgPart = P.wChange * ev.changes; kalanPart = (P.wKalan || 0) * kalanParts.length;
+      cutPart = P.wCut * ev.strokes; barPart = P.wBar * ev.barUnits; chgPart = P.wChange * ev.changes; kalanPart = (P.wKalan || 0) * kalanParts.length;
     }
-    const wastePart = (P.wWaste || 0) * (ev.bars * P.L - state.totalPieceMm);
-    const allG = groups.concat(kalan.fallbackGroups);
+    const wastePart = (P.wWaste || 0) * (ev.matMm - state.totalPieceMm);
     let spreadSum = 0, spreadMax = 0, equalGroups = 0, equalPieces = 0;
     for (const g of allG) {
       spreadSum += g.spread; if (g.spread > spreadMax) spreadMax = g.spread;
       if (g.spread === 0) { equalGroups++; for (const st of g.steps) equalPieces += st.n; }
     }
     const spreadPart = (P.wSpread || 0) * spreadSum;
-    const groupMaterialMm = ev.groupBars * P.L;
     const stats = {
       cost: ev.cost, bars: totalBars, strokes: totalStrokes, changes: ev.changes,
       spreadSum, spreadMax, equalGroups, equalPieces, spreadAvg: allG.length ? spreadSum / allG.length : 0,
@@ -1009,9 +1065,11 @@
       groupBars: ev.groupBars, groupStrokes: ev.groupStrokes, groupChanges: ev.groupChanges,
       kalanStrokes: kp.strokes, kalanChanges: kp.changes, kalanCount: kalanParts.length,
       fallbackBars: kp.fallback ? kp.fallback.bars : 0,
+      // stok boyları
+      lengths: (P.lengths || [P.L]).slice(), barsByLen, kalanBarsByLen: kalan.newBarsByLen,
       // minSum kuralı: yazılan gruplar ile KALANLAR ayrı ayrı
       minSum: P.minSum || 0, listOnly: ms,
-      groupPieces, groupPieceMm,
+      groupPieces, groupPieceMm, groupMaterialMm,
       groupWastePct: groupMaterialMm ? (groupMaterialMm - groupPieceMm) / groupMaterialMm : 0,
       groupPozCount: groups.reduce((a, g) => a + g.steps.length, 0),
       kalanPieces, kalanMm, kalanNewBars: kalan.newBars,
@@ -1030,6 +1088,7 @@
   function validate(result) {
     const P = result.P, errors = [];
     const ms = P.minSum > 0;
+    const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
     const produced = new Map(); // part.id → adet (gruplarda + artık planında)
     const inGroup = new Map();  // part.id → gruplarda kesilen adet
     let fromGroup = true;
@@ -1038,44 +1097,55 @@
       if (fromGroup) inGroup.set(part.id, (inGroup.get(part.id) || 0) + c);
     };
     const allGroups = result.groups.concat(result.kalan.fallbackGroups || []);
-    const pool = new Map(); // "gNo:step" → {count,len}
+    const pool = new Map(); // "gNo:artık" → {count,len}
     for (const g of allGroups) {
+      const L = g.barLen;
+      if (Ls.indexOf(L) < 0) errors.push(`Grup ${g.no}: çubuk boyu ${L} tanımlı boylardan değil (${Ls.join(', ')})`);
       if (g.bars > P.maxBundle) errors.push(`Grup ${g.no}: demet ${g.bars} > ${P.maxBundle}`);
-      if (ms && g.sumLen < P.minSum) errors.push(`Grup ${g.no}: toplam ${g.sumLen} < en az grup toplamı ${P.minSum}`);
-      if (g.steps.length && P.maxSpread != null) {
-        const sp = g.steps[0].n - g.steps[g.steps.length - 1].n;
-        if (sp > P.maxSpread) errors.push(`Grup ${g.no}: adet farkı ${sp} > ${P.maxSpread}`);
-      }
-      let active = g.steps.length ? g.steps[0].n : 0, used = 0;
-      g.steps.forEach((s, i) => {
-        if (s.n > active) errors.push(`Grup ${g.no} adım ${i + 1}: demet büyüyor (${active}→${s.n})`);
-        if (s.n < active) {
-          const key = `${g.no}:${i}`;
-          pool.set(key, { count: active - s.n, len: P.L - used });
-        }
-        active = s.n;
-        used += s.len + P.kerf;
-        if (used > P.L - P.safety) errors.push(`Grup ${g.no} adım ${i + 1}: çubuk boyu aşıldı (${used} > ${P.L - P.safety})`);
+      let maxN = 0, minN = Infinity, used = 0, sum = 0;
+      g.steps.forEach((st, i) => {
+        if (st.n > maxN) maxN = st.n;
+        if (st.n < minN) minN = st.n;
+        used += st.len + P.kerf; sum += st.len;
+        if (i > 0 && st.len > g.steps[i - 1].len) errors.push(`Grup ${g.no} satır ${i + 1}: ölçüler büyükten küçüğe sıralı değil (${g.steps[i - 1].len} → ${st.len})`);
+        if (st.setAside !== g.bars - st.n) errors.push(`Grup ${g.no} satır ${i + 1}: kenarda bekleyen ${st.setAside} ≠ ${g.bars} − ${st.n}`);
         let c = 0;
-        for (const a of s.alloc) { add(a.part, a.count); c += a.count; }
-        if (c !== s.n) errors.push(`Grup ${g.no} adım ${i + 1}: dağıtım ${c} ≠ adet ${s.n}`);
+        for (const a of st.alloc) { add(a.part, a.count); c += a.count; }
+        if (c !== st.n) errors.push(`Grup ${g.no} satır ${i + 1}: dağıtım ${c} ≠ adet ${st.n}`);
       });
-      if (!g.fallback) pool.set(`${g.no}:${g.steps.length}`, { count: active, len: P.L - used });
+      if (!g.steps.length) continue;
+      if (maxN !== g.bars) errors.push(`Grup ${g.no}: çubuk sayısı ${g.bars} ≠ en büyük adet ${maxN}`);
+      if (sum !== g.sumLen) errors.push(`Grup ${g.no}: toplam ${g.sumLen} ≠ ${sum}`);
+      if (P.maxSpread != null && maxN - minN > P.maxSpread) errors.push(`Grup ${g.no}: adet farkı ${maxN - minN} > ${P.maxSpread}`);
+      // Demetin bütün satırlarda kesilen çubukları en çok yeri kullanır: çubuğa sığmalı
+      if (used > L - P.safety) errors.push(`Grup ${g.no}: çubuk boyu aşıldı (${used} > ${L - P.safety})`);
+      // Daha kısa bir stok boyuna sığıyorsa oradan kesilmeliydi
+      for (const x of Ls) if (x < L && used <= x - P.safety) errors.push(`Grup ${g.no}: ${x}'lik çubuğa sığarken ${L}'lik yazılmış`);
+      if (ms && !g.fallback && g.sumLen < L - (P.L - P.minSum)) errors.push(`Grup ${g.no}: toplam ${g.sumLen} < en az grup toplamı ${L - (P.L - P.minSum)} (${L}'lik çubuk)`);
+      if (g.fallback) continue;
+      // artık havuzu: adet düzeylerine göre (derleyiciyle aynı kural)
+      const levels = [];
+      for (const st of g.steps) if (levels.indexOf(st.n) < 0) levels.push(st.n);
+      levels.sort((a, b) => b - a);
+      for (let j = 0; j < levels.length - 1; j++) {
+        let u = 0;
+        for (const st of g.steps) if (st.n >= levels[j]) u += st.len + P.kerf;
+        pool.set(`${g.no}:${j + 1}`, { count: levels[j] - levels[j + 1], len: L - u });
+      }
+      pool.set(`${g.no}:${g.steps.length}`, { count: minN, len: L - used });
     }
     fromGroup = false;
     for (const e of result.kalan.plan) {
       const key = `${e.groupNo}:${e.step}`;
       const b = pool.get(key);
-      if (!b) { errors.push(`Artık planı: kaynak bulunamadı (Grup ${e.groupNo} adım ${e.step})`); continue; }
-      if (e.derived) {
-        // türetilmiş demet: kaynağın toplam adedinden düşülür (aşağıda)
-      }
+      if (!b) { errors.push(`Artık planı: kaynak bulunamadı (Grup ${e.groupNo} artık ${e.step})`); continue; }
+      if (!e.derived && e.len !== b.len) errors.push(`Artık planı Grup ${e.groupNo}: artık boyu ${e.len} ≠ ${b.len}`);
       let active = e.count, used = 0;
-      for (const s of e.steps) {
-        if (s.n > active) errors.push(`Artık planı Grup ${e.groupNo}: demet büyüyor`);
-        active = s.n; used += s.len + P.kerf;
-        if (used > e.len - P.safety) errors.push(`Artık planı Grup ${e.groupNo} adım ${e.step}: artık boyu aşıldı (${used} > ${e.len - P.safety})`);
-        add(s.part, s.n);
+      for (const st of e.steps) {
+        if (st.n > active) errors.push(`Artık planı Grup ${e.groupNo}: demet büyüyor`);
+        active = st.n; used += st.len + P.kerf;
+        if (used > e.len - P.safety) errors.push(`Artık planı Grup ${e.groupNo} artık ${e.step}: artık boyu aşıldı (${used} > ${e.len - P.safety})`);
+        add(st.part, st.n);
       }
     }
     // artık adet kontrolü: aynı kaynaktan kesilen toplam ilk-adım adedi (türetilmemiş) ≤ kaynak adedi
@@ -1089,6 +1159,11 @@
       const b = pool.get(key);
       if (b && used > b.count) errors.push(`Artık planı ${key}: ${used} çubuk kullanılmış, kaynakta ${b.count} var`);
     }
+    // Boy bazında çubuk sayımı gruplarla tutmalı
+    const byLen = {};
+    for (const g of allGroups) byLen[g.barLen] = (byLen[g.barLen] || 0) + g.bars;
+    const sb = (result.stats && result.stats.barsByLen) || {};
+    for (const k of Object.keys(byLen).concat(Object.keys(sb))) if ((byLen[k] || 0) !== (sb[k] || 0)) { errors.push(`Boy sayımı tutmuyor: ${k}'lik ${sb[k] || 0} yazıyor, gruplarda ${byLen[k] || 0}`); break; }
     // Her poz ya tam adediyle bir grupta kesilir ya da KALANLAR'da listelenir (ikisi birden olmaz).
     const listed = new Map();
     for (const k of result.kalan.parts) listed.set(k.part.id, (listed.get(k.part.id) || 0) + k.count);
@@ -1140,6 +1215,12 @@
   async function optimize(items, params, opts) {
     const P = Object.assign({}, DEFAULTS, params || {});
     opts = opts || {};
+    // Stok boyları: benzersiz, büyükten küçüğe; P.L en uzun boydur
+    let Ls = Array.isArray(P.lengths) && P.lengths.length ? P.lengths : [P.L];
+    Ls = Ls.map(Number).filter(x => isFinite(x) && x > 0);
+    Ls = Ls.filter((x, i) => Ls.indexOf(x) === i).sort((a, b) => b - a);
+    if (!Ls.length) Ls = [DEFAULTS.L];
+    P.lengths = Ls; P.L = Ls[0];
     const rng = mulberry32(P.seed >>> 0);
     // Çubuğa sığmayan (ölçü + testere payı > boy − emniyet) pozlar plana alınamaz; ayrı listelenir.
     const allItems = items, capLen = P.L - P.safety;
@@ -1200,5 +1281,5 @@
     return result;
   }
 
-  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, KALAN };
+  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, pickBar, KALAN };
 });

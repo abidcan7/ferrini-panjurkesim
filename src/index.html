@@ -45,6 +45,8 @@
   .mats td.name b { font-weight: 600; }
   .mats td.name .code { color: var(--muted); font-size: 11px; font-family: var(--mono); }
   .mats input[type=number] { width: 62px; }
+  input.lens { width: 132px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; text-align: right; }
+  .mats td .hint { font-size: 11px; }
   .matwrap { overflow-x: auto; }
   .matfoot { color: var(--muted); font-size: 12px; margin-top: 6px; }
   .wtab { width: 100%; border-collapse: collapse; }
@@ -126,7 +128,7 @@
 <body>
 <header>
   <h1>Panjur Kesim Optimizasyonu</h1>
-  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, dikme, alt parça, tambur · 6500 mm çubuk</span>
+  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, kutu, dikme, alt parça, tambur · 6500 / 5000 / 4700 mm çubuk</span>
 </header>
 <main>
   <section class="card" id="sec-files">
@@ -145,10 +147,11 @@
     <div class="params">
       <fieldset>
         <legend>Çubuk ve testere</legend>
-        <div class="row"><label>Çubuk boyu <input type="number" id="pL" value="6500" step="10"> mm</label> <span class="hint">varsayılan</span></div>
+        <div class="row"><label>Çubuk boyları <input type="text" id="pL" class="lens" value="6500, 5000, 4700"> mm</label></div>
+        <div class="hint" style="margin-bottom:6px">Stokta bulunan boylar, virgülle. Her grup sığdığı en kısa boydan kesilir; parça tablosundan parça başına değiştirilir.</div>
         <div class="row"><label>Testere payı <input type="number" id="pKerf" value="4" step="0.5"> mm/kesim</label></div>
         <div class="row"><label>Emniyet payı <input type="number" id="pSafety" value="5" step="1"> mm/çubuk</label></div>
-        <div class="hint">Sığma şartı: Σ ölçü + kesim × testere payı ≤ boy − emniyet</div>
+        <div class="hint">Sığma şartı: Σ ölçü + kesim × testere payı ≤ boy − emniyet. Grup içinde satırlar ölçüye göre büyükten küçüğe kesilir.</div>
       </fieldset>
       <fieldset class="wide">
         <legend>Öncelikler — önce adet yakınlığı, sonra kesim / çubuk dengesi</legend>

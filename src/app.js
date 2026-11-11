@@ -2,8 +2,6 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const TYPE_LABEL = { lamel: 'LAMEL', dikme: 'DİKME', altparca: 'ALT PARÇA', tambur: 'TAMBUR', fitil: 'FİTİL', diger: 'DİĞER' };
-  const TYPE_ORDER = ['lamel', 'dikme', 'altparca', 'tambur', 'fitil', 'diger'];
   const app = { files: [], mats: [], results: [], running: false, abort: false, workerSrc: null };
 
   // ---------------------------------------------------------------- yardımcılar
@@ -20,19 +18,38 @@
   const PARAM_IDS = ['pL', 'pKerf', 'pSafety', 'pSpread', 'wSpread', 'wCut', 'wBar', 'wChange', 'wKalan', 'pTime'];
   const WEIGHT_IDS = ['pSpread', 'wSpread', 'wCut', 'wBar', 'wChange', 'wKalan'];
   const CHECK_IDS = ['oMulti', 'oSplit'];
-  // 2: adet yakınlığı önceliği · 3: her satır tek poz (birleştirme kaldırıldı, poz bölme varsayılan kapalı).
-  // Eski sürümde kaydedilmiş öncelik ayarları ve bölme kutuları yeni varsayılanlara döner.
-  const PARAMS_VERSION = 3;
+  // 2: adet yakınlığı önceliği · 3: her satır tek poz (birleştirme kaldırıldı, poz bölme varsayılan kapalı)
+  // · 4: tek çubuk boyu yerine boy listesi (6500, 5000, 4700).
+  // Eski sürümde kaydedilmiş, anlamı değişen ayarlar yeni varsayılanlara döner.
+  const PARAMS_VERSION = 4;
   function loadParams() {
     const saved = lsGet('panjur.params', null);
     if (!saved) return;
-    const old = saved.v !== PARAMS_VERSION;
+    const sv = Number(saved.v) || 0;
     for (const id of PARAM_IDS) {
-      if (old && WEIGHT_IDS.includes(id)) continue;
+      if (sv < 3 && WEIGHT_IDS.includes(id)) continue;
+      if (sv < 4 && id === 'pL') continue;
       if (saved[id] != null && $(id)) $(id).value = saved[id];
     }
-    if (!old) for (const id of CHECK_IDS) if (saved[id] != null && $(id)) $(id).checked = !!saved[id];
+    if (sv >= 3) for (const id of CHECK_IDS) if (saved[id] != null && $(id)) $(id).checked = !!saved[id];
   }
+
+  // ---------------------------------------------------------------- çubuk boyları
+  // "6500, 5000, 4700" gibi bir metinden stok boyları (büyükten küçüğe, yinelenmeden)
+  const DEFAULT_LENGTHS = [6500, 5000, 4700];
+  function parseLengths(text) {
+    const out = [];
+    for (const t of String(text == null ? '' : text).split(/[\s,;\/|+]+/)) {
+      const v = Math.round(Number(t.replace(/\./g, '')));
+      if (isFinite(v) && v >= 100 && !out.includes(v)) out.push(v);
+    }
+    return out.sort((a, b) => b - a);
+  }
+  function defaultLengths() {
+    const l = parseLengths($('pL').value);
+    return l.length ? l : DEFAULT_LENGTHS.slice();
+  }
+  const byLenText = o => Object.keys(o || {}).map(Number).sort((a, b) => b - a).map(L => `${fmt(L)} × ${fmt(o[L])}`).join(' · ');
   function saveParams() {
     const o = { v: PARAMS_VERSION };
     for (const id of PARAM_IDS) o[id] = $(id).value;
@@ -49,7 +66,7 @@
   function readParams() {
     const num = id => Number($(id).value);
     return {
-      L: num('pL'), kerf: num('pKerf'), safety: num('pSafety'),
+      lengths: defaultLengths(), L: defaultLengths()[0], kerf: num('pKerf'), safety: num('pSafety'),
       wCut: num('wCut'), wBar: num('wBar'), wChange: num('wChange'), wKalan: num('wKalan'),
       wSpread: num('wSpread'), maxSpread: spreadLimit($('pSpread').value),
       mergeSameLength: false,   // iptal: her satır tek poz
@@ -112,8 +129,8 @@
     }
     if (w.wChange > 0 && w.wBar > 0) li.push(`1 çubuk kazanmak için <b>${num(w.wBar / w.wChange)} kez demet bozma</b> göze alınır.`);
     if (w.wCut > 0) li.push(`Bir pozu KALANLAR'a atmanın bedeli ≈ <b>${num(w.wKalan / w.wCut)} kesim</b> (üstüne artıktan kesim maliyeti de eklenir).`);
-    const L = Number($('pL').value) || 6500;
-    if (w.wBar > 0) li.push(`Tam boy bir çubuk (<b>${fmt(L)} mm</b>) ${num(w.wBar)} puan; eşit maliyetli çözümlerde fire az olan seçilir.`);
+    const Ls = defaultLengths();
+    if (w.wBar > 0) li.push(`En uzun çubuk (<b>${fmt(Ls[0])} mm</b>) ${num(w.wBar)} puan${Ls.length > 1 ? ', kısa boylar boyuyla orantılı (' + Ls.slice(1).map(x => fmt(x) + ' → ' + num(w.wBar * x / Ls[0])).join(', ') + ')' : ''}; eşit maliyetli çözümlerde fire az olan seçilir.`);
     let flag = '';
     if (S > 0 && S < 9999 && w.wSpread * S >= 3 * w.wBar && w.wBar > 0) flag += `<div class="warn2">⚠ Adet farkı çok pahalı: ${S} farklı bir grup yerine ${num(w.wSpread * S / w.wBar)} çubuk fazla harcanır; sınır fiilen kullanılmaz.</div>`;
     // Sınırdaki bir farkı gruba almak, pozu KALANLAR'a atmaktan pahalıysa araç KALANLAR'a kaçar
@@ -197,7 +214,19 @@
   // En az grup toplamı: lamelde çubuk boyunun 250 mm altı (6500 → 6250); diğer parçalarda kural yok (0).
   const MIN_SUM_SLACK = 250;
   function defaultMinSum(m, L) { return m.type === 'lamel' ? Math.max(0, L - MIN_SUM_SLACK) : 0; }
-  function defaultCfg(m, defL) { return { on: !!m.defaultOn, L: defL, bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defL) }; }
+  // lengths: bu parçanın stok boyları (büyükten küçüğe); L en uzunu. En az grup toplamı en uzun boy içindir.
+  // Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) varsayılan olarak kapalı gelir.
+  function defaultCfg(m, defLs) {
+    const cap = defLs[0] - (Number($('pSafety').value) || 0), kerf = Number($('pKerf').value) || 0;
+    const fits = m.items.some(it => it.len + kerf <= cap);
+    return { on: !!m.defaultOn && fits, lengths: defLs.slice(), L: defLs[0], bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defLs[0]) };
+  }
+  // Kısa boylarda geçerli sınırlar: "5.000 → 4.750 · 4.700 → 4.450"
+  function minSumHint(cfg) {
+    if (!(cfg.minSum > 0) || cfg.lengths.length < 2) return '';
+    const slack = cfg.L - cfg.minSum;
+    return cfg.lengths.slice(1).map(x => `${fmt(x)} → ${fmt(x - slack)}`).join(' · ');
+  }
 
   function renderMaterials() {
     const box = $('matList');
@@ -214,34 +243,39 @@
         <td>${m.pozCount}</td>
         <td>${fmt(m.pieces)}</td>
         <td>${(m.totalMm / 1000).toFixed(1)} m</td>
-        <td><input type="number" step="10" min="100" data-mi="${i}" data-mk="L" value="${m.cfg.L}"></td>
+        <td><input type="text" class="lens" data-mi="${i}" data-mk="lengths" value="${m.cfg.lengths.join(', ')}" title="Bu parçanın stok boyları (mm), virgülle. Her grup sığdığı en kısa boydan kesilir."></td>
         <td><input type="number" step="1" min="1" data-mi="${i}" data-mk="bundle" value="${m.cfg.bundle}"></td>
-        <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="Ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok"></td>
+        <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="En uzun çubuk için: ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok">${minSumHint(m.cfg) ? '<br><span class="hint">' + minSumHint(m.cfg) + '</span>' : ''}</td>
       </tr>`).join('');
       const unknown = app.mats.filter(m => !m.known).length;
       box.innerHTML = `<div class="matwrap"><table class="mats">
-        <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyu</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
+        <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyları</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
         <div class="matfoot">İşaretli parçalar optimize edilir; demet = tek seferde kesilen en fazla adet.
+          <b>Çubuk boyları:</b> parçanın stokta bulunan boyları, virgülle (ör. 6500, 5000, 4700). Her grup sığdığı en kısa boydan kesilir;
+          sonuçta hangi boydan kaç çubuk kesileceği yazar. Bir parça yalnızca tek boyda geliyorsa buraya yalnızca o boyu yazın.
           <b>En az grup toplamı:</b> bir grubun ölçüleri toplamı bu değerin altında kalıyorsa o grup yazılmaz, pozları KALANLAR'a bırakılır
-          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; çubuk boyunu değiştirince ${MIN_SUM_SLACK} mm altına ayarlanır). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boyunu girin.' : ''}</div>`;
+          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boylarını girin.' : ''}</div>`;
       box.querySelectorAll('input[data-mi]').forEach(inp => inp.addEventListener('change', e => {
         const m = app.mats[Number(e.target.dataset.mi)], k = e.target.dataset.mk;
         if (k === 'on') m.cfg.on = e.target.checked;
-        else {
-          const v = Math.round(Number(e.target.value) || 0);
-          if (k === 'L') {
-            // en az grup toplamı çubuk boyunu izliyorsa (boy − 250) yeni boya göre güncellenir
+        else if (k === 'lengths') {
+          const lens = parseLengths(e.target.value);
+          if (lens.length) {
+            // en az grup toplamı en uzun boyu izliyorsa (boy − 250) yeni boya göre güncellenir
             const follows = m.cfg.minSum > 0 && m.cfg.minSum === Math.max(0, m.cfg.L - MIN_SUM_SLACK);
-            m.cfg.L = Math.max(100, v);
-            if (follows) m.cfg.minSum = Math.max(0, m.cfg.L - MIN_SUM_SLACK);
-          } else if (k === 'minSum') m.cfg.minSum = Math.max(0, Math.min(v, m.cfg.L - 1));
+            m.cfg.lengths = lens; m.cfg.L = lens[0];
+            m.cfg.minSum = follows ? Math.max(0, m.cfg.L - MIN_SUM_SLACK) : Math.max(0, Math.min(m.cfg.minSum, m.cfg.L - 1));
+          }
+        } else {
+          const v = Math.round(Number(e.target.value) || 0);
+          if (k === 'minSum') m.cfg.minSum = Math.max(0, Math.min(v, m.cfg.L - 1));
           else m.cfg[k] = Math.max(1, v);
           e.target.value = m.cfg[k];
         }
         matCfgSave(m.key, m.cfg);
         if (k === 'on') e.target.closest('tr').classList.toggle('off', !m.cfg.on);
-        if (k === 'L') { renderMaterials(); return; }
+        if (k === 'lengths' || k === 'minSum') { renderMaterials(); return; }
         updateRunHint();
       }));
     }
@@ -268,16 +302,19 @@
   // Tüm dosyalardan malzeme (tür + profil + renk) bazında poz listesi.
   // Stok kodu projeden projeye değişebildiği için anahtar profil adı + renktir.
   function collectMaterials() {
-    const defL = Number($('pL').value) || 6500;
+    const defLs = defaultLengths();
     const saved = matCfgAll();
     const arr = PanjurParse.mergeProjects(app.files);
     for (const m of arr) {
-      const def = defaultCfg(m, defL);
+      const def = defaultCfg(m, defLs);
       const sv = saved[m.key];
       if (sv) {
-        const L = Number(sv.L) || def.L;
+        // Eski kayıtlarda tek boy (L) vardı: 6500 ise yeni boy listesi uygulanır, elle değiştirilmişse o boy korunur
+        let lens = Array.isArray(sv.lengths) ? parseLengths(sv.lengths.join(',')) : [];
+        if (!lens.length) lens = Number(sv.L) && Number(sv.L) !== 6500 ? [Math.round(Number(sv.L))] : def.lengths.slice();
+        const L = lens[0];
         // minSum alanı olmayan eski kayıtlarda varsayılan (lamel: boy − 250) uygulanır
-        m.cfg = { on: !!sv.on, L, bundle: Number(sv.bundle) || def.bundle, minSum: sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Number(sv.minSum)) : defaultMinSum(m, L) };
+        m.cfg = { on: !!sv.on, lengths: lens, L, bundle: Number(sv.bundle) || def.bundle, minSum: sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Math.min(Number(sv.minSum), L - 1)) : defaultMinSum(m, L) };
       } else m.cfg = def;
     }
     // sekme / sayfa adı: mergeProjects'in verdiği ayırt edici kısa ad (LAMEL EKO, LAMEL STANDART …)
@@ -383,7 +420,7 @@
     const lines = mats.map(m => {
       const div = document.createElement('div'); div.className = 'pline';
       const sc = timeScale(m);
-      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
+      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · çubuk ${m.cfg.lengths.join(' / ')} · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
       prog.appendChild(div); return div;
     });
     const t0 = performance.now();
@@ -391,14 +428,14 @@
       for (let i = 0; i < mats.length; i++) {
         if (app.abort) break;
         const m = mats[i];
-        const P = { L: m.cfg.L, kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
+        const P = { L: m.cfg.L, lengths: m.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
         const bar = lines[i].querySelector('.pbar > div'), txt = lines[i].children[2];
         const scale = timeScale(m);
         const res = await optimizeMaterial(m, P, Math.round(params.timeMs * scale), (frac, best, n) => { bar.style.width = (frac * 100).toFixed(0) + '%'; txt.textContent = `${(frac * 100).toFixed(0)}% · en iyi maliyet ${isFinite(best) ? Math.round(best) : '–'} · ${n} paralel`; });
         bar.style.width = '100%';
         txt.textContent = res.stats.listOnly
-          ? `tamam · ${res.stats.groupCount} grup · ${res.stats.groupBars} çubuk · KALANLAR ${res.stats.kalanCount} poz`
-          : `tamam · ${res.stats.bars} çubuk · ${res.stats.strokes} kesim · fire %${(res.stats.wastePct * 100).toFixed(1)}`;
+          ? `tamam · ${res.stats.groupCount} grup · ${byLenText(res.stats.barsByLen) || '0 çubuk'} · KALANLAR ${res.stats.kalanCount} poz`
+          : `tamam · ${byLenText(res.stats.barsByLen) || res.stats.bars + ' çubuk'} · ${res.stats.strokes} kesim · fire %${(res.stats.wastePct * 100).toFixed(1)}`;
         app.results.push({ mat: m, result: res });
       }
     } catch (e) {
@@ -436,7 +473,7 @@
         if (app.abort) break;
         const r = runs[i];
         btn.textContent = `Karşılaştırılıyor… ${i + 1}/${runs.length}`;
-        const P = Object.assign({ L: mat.cfg.L, kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
+        const P = Object.assign({ L: mat.cfg.L, lengths: mat.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
           mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit }, weightParams(r.w));
         const res = await optimizeMaterial(mat, P, per, () => {});
         rows.push({ name: r.name, w: r.w, preset: r.preset, st: res.stats });
@@ -491,15 +528,17 @@
     const r = PanjurExcel.stepRow(step);
     return r;
   }
-  function renderGroup(g, kalan) {
-    const rows = g.steps.map((s, i) => {
+  // Satırlar ölçüye göre büyükten küçüğe; adedi demetten az olan satırda aradaki fark kadar çubuk kenarda bekler
+  function renderGroup(g, res) {
+    const multiLen = res && ((res.P.lengths || []).length > 1);
+    const rows = g.steps.map(s => {
       const r = stepCells(s);
-      let note = i === 0 ? `${g.bars} çubuk` : (s.setAside > 0 ? `${s.setAside} çubuk kenara → ${s.n}` : '');
+      const note = s.setAside > 0 ? `${s.setAside} çubuk kenarda` : '';
       return `<tr><td>${esc(r.order)}</td><td>${esc(r.customer)}</td><td>${esc(r.poz)}</td><td>${esc(r.count)}</td><td class="len">${fmt(r.len)}</td><td class="note">${esc(note)}</td></tr>`;
     }).join('');
     const rem = (g.remnants || []).filter(r => !r.final && r.count > 0).map(r => `${r.count}×${fmt(r.len)}`).join(', ');
-    const title = g.fallback ? `GRUP ${g.no} <span class="m">artık yetmedi – yeni çubuk</span>` : `GRUP ${g.no}`;
-    const lastN = g.steps.length ? g.steps[g.steps.length - 1].n : g.bars;
+    const title = `GRUP ${g.no}` + (multiLen ? ` <span class="badge">${fmt(g.barLen)}'lik çubuk</span>` : '') + (g.fallback ? ' <span class="m">artık yetmedi – yeni çubuk</span>' : '');
+    const lastN = g.steps.length ? Math.min(...g.steps.map(s => s.n)) : g.bars;
     const adet = g.spread ? `<span class="df">adet ${g.bars}–${lastN} (fark ${g.spread})</span>` : `<span class="eq">adetler eşit (${g.bars})</span>`;
     return `<div class="gbox"><table class="g"><caption>${title}<span class="m">${g.bars} çubuk · ${g.strokes} kesim${g.changes ? ' · ' + g.changes + ' demet bozma' : ''}</span>${adet}</caption>
       <thead><tr><th>Sipariş</th><th>Müşteri</th><th>POZ</th><th>ADET</th><th>ÖLÇÜ</th><th style="text-align:left">Not</th></tr></thead>
@@ -519,7 +558,7 @@
     const def = k.listOnly ? '' : (k.deficit || []).map(d => `<tr><td colspan="6" class="err">Eksik: poz ${esc(d.item.poz)} × ${d.count} (${fmt(d.item.len)} mm) artıktan çıkmadı → yeni çubuk grubu</td></tr>`).join('');
     const st = res.stats;
     const cap = k.listOnly
-      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · toplamı ${fmt(res.P.minSum)} mm'ye ulaşan gruba giremeyenler${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + st.kalanNewBars + ' çubuk' : ''}`
+      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · toplamı sınıra ulaşan gruba giremeyenler${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + ((res.P.lengths || []).length > 1 ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`
       : `${k.parts.length} poz · artıklardan ${k.strokes} kesim`;
     return `<div class="gbox kalan"><table class="g"><caption>KALANLAR <span class="m">${cap}</span></caption>
       <thead><tr><th>Sipariş</th><th>Müşteri</th><th>POZ</th><th>ADET</th><th>ÖLÇÜ</th><th style="text-align:left">Kaynak</th></tr></thead><tbody>${rows}${def}</tbody></table></div>`;
@@ -543,29 +582,32 @@
     const v = res.validation;
     const lim = res.P.maxSpread >= 9999 ? 'sınır yok' : 'sınır ' + res.P.maxSpread;
     // En az grup toplamı kuralı açıkken yazılan gruplar ile KALANLAR ayrı ayrı özetlenir
+    const multiLen = (res.P.lengths || []).length > 1;
+    const slack = res.P.L - res.P.minSum;
+    const minText = multiLen ? res.P.lengths.map(x => fmt(x) + ' → ' + fmt(x - slack)).join(' · ') : fmt(res.P.minSum);
     const stats = (st.listOnly ? [
-      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz · her grubun toplamı ≥ ${fmt(res.P.minSum)}`],
+      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz · grup toplamı ≥ ${multiLen ? 'boy − ' + fmt(slack) : fmt(res.P.minSum)}`],
       ['Eşit adetli grup', `${st.equalGroups}/${st.groupCount}`, `en çok fark ${st.spreadMax} · ${lim}`],
-      ['Grup çubuğu', fmt(st.groupBars), `gruplarda fire ${(st.groupWastePct * 100).toFixed(1)} %`],
-      ['KALANLAR', st.kalanCount + ' poz', `${fmt(st.kalanPieces)} parça${st.kalanNewBars ? ' · ≈ ' + st.kalanNewBars + ' çubuk' : ''}`],
-      ['Toplam çubuk', '≈ ' + fmt(st.bars), `alt sınır ${st.lowerBoundBars} · KALANLAR tahmini`],
+      ['Grup çubuğu', fmt(st.groupBars), `${multiLen ? byLenText(st.barsByLen) + ' · ' : ''}fire ${(st.groupWastePct * 100).toFixed(1)} %`],
+      ['KALANLAR', st.kalanCount + ' poz', `${fmt(st.kalanPieces)} parça${st.kalanNewBars ? ' · ≈ ' + (multiLen ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`],
+      ['Toplam çubuk', '≈ ' + fmt(st.bars), multiLen ? `${(st.materialMm / 1000).toFixed(0)} m malzeme · KALANLAR tahmini` : `alt sınır ${st.lowerBoundBars} · KALANLAR tahmini`],
       ['Demet bozma', st.groupChanges, ''],
       ['Kesim', st.groupStrokes, 'gruplarda'],
     ] : [
       ['Eşit adetli grup', `${st.equalGroups}/${st.groupCount}`, `en çok fark ${st.spreadMax} · ${lim}`],
-      ['Çubuk', st.bars, `alt sınır ${st.lowerBoundBars} · ${(st.bars * res.P.L / 1000).toFixed(0)} m`],
+      ['Çubuk', st.bars, multiLen ? `${byLenText(st.barsByLen)} · ${(st.materialMm / 1000).toFixed(0)} m` : `alt sınır ${st.lowerBoundBars} · ${(st.bars * res.P.L / 1000).toFixed(0)} m`],
       ['Kesim', st.strokes, `grup ${st.groupStrokes}${st.kalanStrokes ? ' + artık ' + st.kalanStrokes : ''}`],
       ['Fire', (st.wastePct * 100).toFixed(1) + ' %', `${(st.wasteMm / 1000).toFixed(1)} m`],
       ['Demet bozma', st.changes, ''],
       ['Grup', st.groupCount, `${res.items.length} poz · ${fmt(st.pieces)} parça`],
       ['KALANLAR', st.kalanCount, st.fallbackBars ? `+${st.fallbackBars} yeni çubuk` : 'artıktan'],
     ]).map(([k, val, s]) => `<div class="stat"><div class="k">${k}</div><div class="v">${val}</div><div class="s">${s}</div></div>`).join('');
-    const groups = res.groups.map(g => renderGroup(g)).join('') + (res.kalan.fallbackGroups || []).map(g => renderGroup(g)).join('') + renderKalan(res);
+    const groups = res.groups.map(g => renderGroup(g, res)).join('') + (res.kalan.fallbackGroups || []).map(g => renderGroup(g, res)).join('') + renderKalan(res);
     $('resBody').innerHTML = `<div class="stats">${stats}</div>
       <div class="valid ${v.ok ? 'ok' : 'bad'}">${v.ok ? (st.listOnly
-        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; yazılan her grubun toplamı en az ${fmt(res.P.minSum)} mm, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.`
+        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; yazılan her grubun toplamı en az ${multiLen ? '(' + minText + ')' : fmt(res.P.minSum) + ' mm'}, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.`
         : '✔ Doğrulama: her pozun adedi tam, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.') : '✖ Doğrulama hataları: ' + esc(v.errors.slice(0, 5).join(' | '))}</div>
-      ${st.listOnly && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${fmt(res.P.minSum)} mm'ye ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
+      ${st.listOnly && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${multiLen ? 'sınıra (' + minText + ')' : fmt(res.P.minSum) + " mm'ye"} ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
       ${(res.oversize || []).length ? `<div class="valid bad">⚠ ${res.oversize.length} poz çubuk boyundan (${fmt(res.P.L)} mm) uzun olduğu için plana alınmadı: ${res.oversize.slice(0, 8).map(o => 'poz ' + esc(o.poz) + ' (' + o.count + ' × ' + fmt(o.len) + ' mm)').join(', ')}${res.oversize.length > 8 ? ' …' : ''}</div>` : ''}
       <div class="cmp">Maliyet ${Math.round(st.cost)} (başlangıç ${Math.round(res.initialCost)}) · ${fmt(res.iterations)} iterasyon · ${esc(x.mat.desc)} ${esc(x.mat.color)}</div>
       <div class="breakdown">${costBreakdown(res)}</div>
@@ -629,7 +671,11 @@
     $('cmpBtn').addEventListener('click', compareWeights);
     for (const id of WEIGHT_IDS) $(id).addEventListener('input', renderWeights);
     for (const id of CHECK_IDS) $(id).addEventListener('change', renderWeights);
-    for (const id of PARAM_IDS.concat(CHECK_IDS)) $(id).addEventListener('change', () => { saveParams(); if (id === 'pL') { renderMaterials(); renderWeights(); } else updateRunHint(); });
+    for (const id of PARAM_IDS.concat(CHECK_IDS)) $(id).addEventListener('change', () => {
+      if (id === 'pL') $('pL').value = defaultLengths().join(', ');
+      saveParams();
+      if (id === 'pL') { renderMaterials(); renderWeights(); } else updateRunHint();
+    });
     $('parHint').textContent = `${workerCount()} paralel arama`;
     renderWeights();
     if (new URLSearchParams(location.search).get('debug')) window.__panjur = app;   // tanılama
@@ -649,7 +695,7 @@
         try {
           const items = [];
           for (let i = 1; i <= 24; i++) items.push({ order: '1', customer: 'T', poz: i, len: 1200 + (i % 7) * 97, count: 18 + (i % 3) });
-          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, L: 6500, bundle: 50, minSum: 0 } };
+          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, lengths: [6500], L: 6500, bundle: 50, minSum: 0 } };
           const P = Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 50 });
           const res = await optimizeMaterial(mat, P, 1500, () => {});
           let ls = true;

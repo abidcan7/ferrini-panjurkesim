@@ -29,7 +29,14 @@
     { type: 'dikme', label: 'DİKME', bundle: 2, on: true, match: s => /dikme/.test(s) },
     { type: 'altparca', label: 'ALT PARÇA', bundle: 1, on: true, match: s => /alt\s*par/.test(s) },
     { type: 'tambur', label: 'TAMBUR', bundle: 1, on: true, match: s => /tambur|(^|[^a-z])m\.\s*borusu|motor\s*borusu/.test(s) },
+    // Kutu profilleri: "SK-165/ÖN 45 KUTU" ve "SK-165/AR 90 KUTU" (kutunun ön ve arka parçası; poz başına
+    // birer adet, tek tek kesilir). Her stok kodu ayrı profildir, ayrı optimize edilir.
+    { type: 'kutu', label: 'KUTU', bundle: 1, on: true, match: s => /kutu/.test(s) && !/kapa/.test(s) },
+    { type: 'kutukapak', label: 'KUTU KAPAK', bundle: 1, on: true, match: s => /kutu/.test(s) && /kapa/.test(s) },
+    { type: 'kosebent', label: 'KÖŞEBENT', bundle: 1, on: true, match: s => /kosebent/.test(s) },
+    { type: 'pano', label: 'PANO U', bundle: 1, on: true, match: s => /(^|[^a-z])pano(\s|$)/.test(s) },
     { type: 'fitil', label: 'FİTİL', bundle: 1, on: false, match: s => /fitil/.test(s) },
+    { type: 'strafor', label: 'STRAFOR', bundle: 1, on: false, match: s => /strafor/.test(s) },
   ];
   const OTHER = { type: 'diger', label: 'DİĞER', bundle: 1, on: false };
 
