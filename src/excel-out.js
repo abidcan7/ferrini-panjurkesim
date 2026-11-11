@@ -102,7 +102,7 @@
     const rows = [];
     if (!kalan.parts.length) return rows;
     // kural açıkken KALANLAR yalnızca listedir; gereken yeni çubuk tahmini başlığın yanında yazar
-    rows.push({ kind: 'header', A: 'KALANLAR', big: true, F: kalan.listOnly && kalan.newBars ? `≈ ${kalan.newBars} çubuk` : '' });
+    rows.push({ kind: 'header', A: 'KALANLAR', big: true, F: kalan.listOnly && kalan.newBars ? `≈ ${kalan.newBars} çubuk` + (kalan.shortBars ? ' (stok yetmiyor)' : '') : '' });
     const src = new Map();
     for (const e of kalan.plan) for (const s of e.steps) {
       const m = src.get(s.part.id) || new Map();
@@ -393,14 +393,14 @@
     const ws = wb.addWorksheet('ÖZET');
     plainView(ws, false);
     ws.getColumn(1).width = 26; ws.getColumn(2).width = 12;
-    for (let c = 3; c <= 26; c++) ws.getColumn(c).width = 12;
-    ws.getColumn(12).width = 34; ws.getColumn(20).width = 28;
+    for (let c = 3; c <= 27; c++) ws.getColumn(c).width = 12;
+    ws.getColumn(3).width = 30; ws.getColumn(12).width = 34; ws.getColumn(20).width = 28;
     ws.getCell('A1').value = 'KESİM OPTİMİZASYONU – ÖZET'; ws.getCell('A1').font = { name: FONT, size: 14, bold: true };
     ws.getCell('A2').value = 'Oluşturma: ' + new Date().toLocaleString('tr-TR');
     let r = 4;
     const hdr = ['Parça', 'Renk', 'Çubuk boyları', 'Demet', 'En az grup toplamı', 'Poz', 'Parça adedi', 'Toplam (m)',
       'Grup', 'Gruplardaki poz', 'Grup çubuğu', 'Boya göre çubuk', 'Grup firesi %', 'Eşit adetli grup', 'En çok adet farkı', 'Demet bozma',
-      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'KALANLAR boya göre', 'Toplam çubuk', 'Malzeme (m)', 'Toplam fire %', 'Maliyet'];
+      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'KALANLAR boya göre', 'Stok dışı çubuk', 'Toplam çubuk', 'Malzeme (m)', 'Toplam fire %', 'Maliyet'];
     const byLenText = o => Object.keys(o || {}).map(Number).sort((a, b) => b - a).map(L => `${L} × ${o[L]}`).join(' · ');
     hdr.forEach((h, i) => { const c = ws.getCell(r, i + 1); c.value = h; c.font = { name: FONT, bold: true }; c.border = BORDER; c.alignment = { wrapText: true, vertical: 'middle' }; });
     ws.getRow(r).height = 30;
@@ -409,12 +409,16 @@
       const st = x.result.stats, P = x.result.P;
       const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
       const writtenBars = Object.values(st.barsByLen || {}).reduce((a, b) => a + b, 0);   // yazılan bütün grupların çubuğu
-      const vals = [x.meta.desc, x.meta.color, Ls.length > 1 ? Ls.join(' / ') : P.L, P.maxBundle,
+      const stock = P.stock || {};
+      const limited = Object.keys(stock).length > 0;
+      // çubuk boyları: seçili boylar; stok adedi girilmişse yanında
+      const lensText = Ls.length > 1 || limited ? Ls.map(L => L + (stock[L] != null ? ` (${stock[L]} adet)` : '')).join(' / ') : P.L;
+      const vals = [x.meta.desc, x.meta.color, lensText, P.maxBundle,
         P.minSum > 0 ? (Ls.length > 1 ? Ls.map(L => L - (P.L - P.minSum)).join(' / ') : P.minSum) : '–',
         x.result.items.length, st.pieces, +(st.pieceMm / 1000).toFixed(1),
         st.groupCount + (st.listOnly ? 0 : (x.result.kalan.fallbackGroups || []).length), st.groupPozCount, writtenBars, byLenText(st.barsByLen),
         +(st.groupWastePct * 100).toFixed(2), st.equalGroups, st.spreadMax, st.groupChanges,
-        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : 0, st.listOnly ? byLenText(st.kalanBarsByLen) : '',
+        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : 0, st.listOnly ? byLenText(st.kalanBarsByLen) : '', st.stockShort || 0,
         st.bars, +(st.materialMm / 1000).toFixed(1), +(st.wastePct * 100).toFixed(2), Math.round(st.cost)];
       vals.forEach((v, i) => { const c = ws.getCell(r, i + 1); c.value = v; c.border = BORDER; });
       r++;
@@ -422,7 +426,8 @@
     r++;
     const notes = [
       'Grup çubuğu ve grup firesi yalnızca yazılan grupları kapsar. Birden fazla çubuk boyu varsa her grup sığdığı en kısa boydan kesilir ("Boya göre çubuk": boy × adet).',
-      'KALANLAR çubuğu: artık demetlerinden çıkmayan KALANLAR pozları için gereken yeni çubuk. En az grup toplamı kuralı açıkken tahminidir: her poz kendi başına, bir çubuğa sığdığı kadar kesilirse (bu pozlar için grup yazılmaz).',
+      'KALANLAR çubuğu: artık demetlerinden çıkmayan KALANLAR pozları için gereken yeni çubuk. KALANLAR yalnızca listeyken (en az grup toplamı kuralı ya da stok adedi sınırı) tahminidir: parçalar tek tek, çubuklara sığdığı kadar yerleştirilirse.',
+      'Stok adedi girilmiş boyda o adet aşılmaz: grup bir uzun boya geçer, hiçbir boyda yer kalmazsa pozları KALANLAR\'a yazılır. "Stok dışı çubuk": KALANLAR için gereken ama stokta karşılığı olmayan çubuk.',
       'Toplam çubuk = grup çubuğu + KALANLAR çubuğu. Malzeme = çubuk adedi × çubuk boyu toplamı; fire buna göredir.',
     ];
     for (const t of notes) { ws.getCell(r, 1).value = t; ws.getCell(r, 1).font = GRAY; r++; }

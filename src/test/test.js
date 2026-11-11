@@ -338,9 +338,9 @@
       const below = await PanjurOpt.optimize([mk(1, 40, 2100), mk(2, 40, 2100), mk(3, 40, 2049)], MS, { iters: 3000, yield: false });
       check(below.validation.ok && below.groups.length === 0 && below.kalan.parts.length === 3 && below.kalan.listOnly === true && (below.kalan.fallbackGroups || []).length === 0,
         'toplamı 6249 olan grup yazılmaz: 3 poz KALANLAR\'da, onlar için yeni çubuk grubu da yazılmaz');
-      // çubuk tahmini: her poz kendi başına, çubuğa sığdığı kadar (2100 ve 2049 mm → çubuktan 3; 40 adet → 14 çubuk)
-      check(below.stats.kalanCount === 3 && below.stats.kalanPieces === 120 && below.stats.groupBars === 0 && below.stats.kalanNewBars === 42 && below.stats.bars === 42 && below.stats.listOnly === true,
-        'KALANLAR özeti: 3 poz, 120 parça, tahmini 3 × 14 = 42 çubuk → ' + JSON.stringify({ poz: below.stats.kalanCount, parca: below.stats.kalanPieces, cubuk: below.stats.kalanNewBars }));
+      // çubuk tahmini: parçalar tek tek, çubuğa sığdığı kadar (2100 ve 2049 mm → çubuktan 3; 120 parça → 40 çubuk)
+      check(below.stats.kalanCount === 3 && below.stats.kalanPieces === 120 && below.stats.groupBars === 0 && below.stats.kalanNewBars === 40 && below.stats.bars === 40 && below.stats.listOnly === true,
+        'KALANLAR özeti: 3 poz, 120 parça, tahmini 40 çubuk (çubuğa 3 parça) → ' + JSON.stringify({ poz: below.stats.kalanCount, parca: below.stats.kalanPieces, cubuk: below.stats.kalanNewBars }));
       const off = await PanjurOpt.optimize([mk(1, 40, 2100), mk(2, 40, 2100), mk(3, 40, 2049)], Object.assign({}, MS, { minSum: 0 }), { iters: 3000, yield: false });
       check(off.validation.ok && off.groups.length === 1 && off.kalan.parts.length === 0 && off.kalan.listOnly === false, 'kural kapalıyken (0) aynı pozlar tek grup olur');
       // pencere araması: çekirdek poza uyan, toplamı 6250–6495 arasına oturan pozlar
@@ -462,7 +462,7 @@
       check(low65.validation.ok && low65.groups.length === 0 && low65.kalan.parts.length === 3, '5.100 toplamlı grup yalnızca 6500\'lüğe sığar, sınırın (6.250) altında: KALANLAR');
       // KALANLAR çubuk tahmini en az malzeme harcayan boydan: 1700 mm → 6500'lükten 3 (14 çubuk = 91 m),
       // 4700'lükten 2 (20 çubuk = 94 m) → 6500 seçilir; 1300 mm → 4700'lükten 3 (14 çubuk = 65,8 m)
-      check(JSON.stringify(low65.stats.kalanBarsByLen) === '{"6500":42}' && low65.stats.kalanNewBars === 42, 'KALANLAR tahmini en az malzemeli boydan: ' + JSON.stringify(low65.stats.kalanBarsByLen));
+      check(JSON.stringify(low65.stats.kalanBarsByLen) === JSON.stringify({ 6500: 40 }) && low65.stats.kalanNewBars === 40, 'KALANLAR tahmini (3 × 40 adet 1.700 mm): çubuğa 3 parça, 40 çubuk, 6500 boyundan → ' + JSON.stringify(low65.stats.kalanBarsByLen));
       check(JSON.stringify(low47.stats.kalanBarsByLen) === JSON.stringify({ 6500: 30 }) && low47.stats.kalanNewBars === 30, 'KALANLAR tahmini (1.500 ve 1.300 mm, 40 adet): 6500 boyundan 4 parça, 10 + 10 + 10 çubuk → ' + JSON.stringify(low47.stats.kalanBarsByLen));
       // gerçek veri: üç boyla daha çok poz gruba girer, sayım tutar
       const it21m = cT.lamel.items.map(i => ({ order: csv.orderNo, customer: 'BİRİNCİ PEN', poz: i.poz, len: i.len, count: i.count }));
@@ -488,6 +488,37 @@
       const ss = new TextDecoder().decode(new Uint8Array(z3.files['xl/sharedStrings.xml'].content));
       const want = 'Çubuk: ' + Object.keys(r3.stats.barsByLen).map(Number).sort((a, b) => b - a).map(L => L + ' × ' + r3.stats.barsByLen[L]).join(' · ');
       check(ss.includes(want) && ss.includes('GRUP 1 · ' + r3.groups[0].barLen), 'Excel: sayfa başında "' + want + '"');
+
+      // ---- stok adedi: boy başına en çok kaç çubuk (isteğe bağlı)
+      const one = k => Array.from({ length: k }, (_, i) => mk(i + 1, 1, 2000));      // 2000 mm: 6500'e 3, 4700'e 2 sığar
+      const S1 = Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 1, seed: 9 });
+      const s3 = await PanjurOpt.optimize(one(12), Object.assign({}, S1, { lengths: [6500], stock: { 6500: 3 } }), { iters: 15000, yield: false });
+      check(s3.validation.ok && JSON.stringify(s3.stats.barsByLen) === JSON.stringify({ 6500: 3 }) && s3.stats.groupPozCount === 9 && s3.stats.kalanCount === 3 && s3.kalan.listOnly === true,
+        'stok: 12 × 2.000 için 4 çubuk gerekir, stokta 3 var → 9 parça kesilir, 3 parça KALANLAR');
+      check(s3.stats.stockShort === 1 && s3.stats.kalanNewBars === 1 && (s3.kalan.fallbackGroups || []).length === 0, 'stok: KALANLAR için 1 çubuk daha gerekir (stok dışı), yeni çubuk grubu yazılmaz');
+      const s22 = await PanjurOpt.optimize(one(12), Object.assign({}, S1, { lengths: [6500, 4700], stock: { 6500: 2, 4700: 2 } }), { iters: 15000, yield: false });
+      check(s22.validation.ok && JSON.stringify(s22.stats.barsByLen) === JSON.stringify({ 4700: 2, 6500: 2 }) && s22.stats.groupPozCount === 10 && s22.stats.kalanCount === 2,
+        'stok: 6500 × 2 ve 4700 × 2 ile 10 parça kesilir (3 + 3 + 2 + 2), 2 parça KALANLAR → ' + JSON.stringify(s22.stats.barsByLen));
+      const sFree = await PanjurOpt.optimize(one(12), Object.assign({}, S1, { lengths: [6500, 4700], stock: { 4700: 2 } }), { iters: 15000, yield: false });
+      check(sFree.validation.ok && sFree.stats.kalanCount === 0 && (sFree.stats.barsByLen[4700] || 0) <= 2 && sFree.stats.stockShort === 0, 'stok: 4700 sınırlı, 6500 sınırsız → hepsi kesilir, 4700 en çok 2 çubuk → ' + JSON.stringify(sFree.stats.barsByLen));
+      const sZero = await PanjurOpt.optimize(one(4), Object.assign({}, S1, { lengths: [6500, 4700], stock: { 4700: 0 } }), { iters: 5000, yield: false });
+      check(sZero.validation.ok && !sZero.stats.barsByLen[4700] && sZero.stats.kalanCount === 0, 'stok: adedi 0 girilen boy kullanılmaz');
+      const sNone = await PanjurOpt.optimize(one(12), Object.assign({}, S1, { lengths: [6500, 4700], stock: { 4700: '' } }), { iters: 5000, yield: false });
+      check(sNone.validation.ok && sNone.kalan.listOnly === false && Object.keys(sNone.stats.stock).length === 0, 'stok: boş adet sınır sayılmaz (eski davranış)');
+      // kural açık lamel + stok: kısa boylar girilen adedi aşmaz, gruplar atandıkları boyda geçerli
+      const rS = await PanjurOpt.optimize(it21m, Object.assign({}, PMs, { seed: 11, maxBundle: 50, stock: { 4700: 100, 5000: 40 } }), { iters: Math.min(ITERS, 30000), yield: false });
+      log('  21542 lamel, 4700 stok 100 + 5000 stok 40:', { boylar: rS.stats.barsByLen, grupPoz: rS.stats.groupPozCount, kalan: rS.stats.kalanCount });
+      check(rS.validation.ok && (rS.stats.barsByLen[4700] || 0) <= 100 && (rS.stats.barsByLen[5000] || 0) <= 40 && rS.groups.every(g => g.sumLen >= g.barLen - 250 && g.perBar <= g.barLen - 5),
+        'stok + kural (21542): 4700 ≤ 100, 5000 ≤ 40, her grup atandığı boyda geçerli → ' + JSON.stringify(rS.stats.barsByLen));
+      check(rS.stats.groupPozCount + rS.stats.kalanCount === 156 && rS.stats.groupPozCount >= 148, 'stok + kural (21542): pozların çoğu yine gruplarda (' + rS.stats.groupPozCount + '/156)');
+      const rLim = await PanjurOpt.optimize(it21m, Object.assign({}, PanjurOpt.DEFAULTS, { seed: 11, maxBundle: 50, minSum: 6250, lengths: [6500], stock: { 6500: 500 } }), { iters: Math.min(ITERS, 30000), yield: false });
+      check(rLim.validation.ok && rLim.stats.groupBars <= 500 && rLim.stats.kalanCount > 0 && rLim.stats.stockShort > 0, 'stok yetmezse (6500 × 500, gereken ≈ 1.400): gruplar ' + rLim.stats.groupBars + ' çubukta kalır, ' + rLim.stats.kalanCount + ' poz KALANLAR, stok dışı ≈ ' + rLim.stats.stockShort);
+      // doğrulayıcı stok aşımını yakalar
+      const tam = Object.assign({}, rS, { P: Object.assign({}, rS.P, { stock: { 6500: 1 } }) });
+      check(!PanjurOpt.validate(tam).ok && PanjurOpt.validate(tam).errors.some(e => /Stok aşıldı/.test(e)), 'doğrulayıcı stok aşımını yakalar');
+      // KALANLAR çubuk tahmini: parçalar tek tek yerleştirilir (3 × 2.000 tek 6500'lük çubuk)
+      const est = PanjurOpt.estimateKalanBars([{ item: { len: 2000 }, count: 3 }, { item: { len: 3000 }, count: 2 }], Object.assign({}, PanjurOpt.DEFAULTS, { lengths: [6500, 4700], L: 6500 }), null);
+      check(est.bars === 2 && est.short === 0 && JSON.stringify(est.byLen) === JSON.stringify({ 6500: 2 }), 'KALANLAR tahmini: 2 × 3.000 + 3 × 2.000 → iki 6500\'lük çubuk (3000 + 3000, 2000 × 3) → ' + JSON.stringify(est.byLen));
     }
 
     // ---------------------------------------------------------------- kutu profilleri ve diğer tanınan parçalar

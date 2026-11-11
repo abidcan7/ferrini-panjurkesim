@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panjur Kesim Optimizasyonu</title>
-<!-- build 2026-11-11 15:23 -->
+<!-- build 2026-11-11 16:05 -->
 <style>
   :root {
     --bg: #f3f4f6; --card: #ffffff; --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb;
@@ -48,6 +48,11 @@
   .mats input[type=number] { width: 62px; }
   input.lens { width: 132px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px; font: inherit; text-align: right; }
   .mats td .hint { font-size: 11px; }
+  .mats td.lenscell { white-space: nowrap; }
+  .lenopt { display: inline-flex; align-items: center; gap: 3px; margin-left: 10px; color: #9ca3af; }
+  .lenopt.on { color: var(--ink); font-weight: 600; }
+  .mats tr.off .lenopt.on { color: #6b7280; }
+  .mats input.qty { width: 58px; font-weight: 400; }
   .matwrap { overflow-x: auto; }
   .matfoot { color: var(--muted); font-size: 12px; margin-top: 6px; }
   .wtab { width: 100%; border-collapse: collapse; }
@@ -129,7 +134,7 @@
 <body>
 <header>
   <h1>Panjur Kesim Optimizasyonu</h1>
-  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, kutu, dikme, alt parça, tambur · 6500 / 5000 / 4700 mm çubuk</span>
+  <span class="sub">İmalat listesi (CSV / Excel) → demet kesim planı · lamel, kutu, dikme, alt parça, tambur · 6500 mm çubuk, isteğe bağlı 5000 ve 4700</span>
 </header>
 <main>
   <section class="card" id="sec-files">
@@ -149,7 +154,7 @@
       <fieldset>
         <legend>Çubuk ve testere</legend>
         <div class="row"><label>Çubuk boyları <input type="text" id="pL" class="lens" value="6500, 5000, 4700"> mm</label></div>
-        <div class="hint" style="margin-bottom:6px">Stokta bulunan boylar, virgülle. Her grup sığdığı en kısa boydan kesilir; parça tablosundan parça başına değiştirilir.</div>
+        <div class="hint" style="margin-bottom:6px">Parça tablosunda seçenek olarak çıkan boylar, virgülle. Her parçada en uzunu işaretli gelir; diğerlerini parça parça işaretlersiniz.</div>
         <div class="row"><label>Testere payı <input type="number" id="pKerf" value="4" step="0.5"> mm/kesim</label></div>
         <div class="row"><label>Emniyet payı <input type="number" id="pSafety" value="5" step="1"> mm/çubuk</label></div>
         <div class="hint">Sığma şartı: Σ ölçü + kesim × testere payı ≤ boy − emniyet. Grup içinde satırlar ölçüye göre büyükten küçüğe kesilir.</div>
@@ -208,7 +213,7 @@
         <div class="row"><label>Arama süresi <input type="number" id="pTime" value="12" min="1" max="600"> sn / parça türü</label> <span class="hint" id="parHint"></span></div>
       </fieldset>
       <fieldset class="wide">
-        <legend>Parçalar: çubuk boyu, demet (tek seferde kesilen adet) ve en az grup toplamı</legend>
+        <legend>Parçalar: çubuk boyları (seçenek ve adet), demet (tek seferde kesilen adet) ve en az grup toplamı</legend>
         <div id="matList"><span class="hint">Dosya yükleyince bulunan parçalar burada listelenir.</span></div>
       </fieldset>
     </div>
@@ -318,6 +323,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
  *     boyda "artık demetleri" oluşturur. Satır sırası çubuk kullanımını değiştirmez.
  *   - Stok boyları (lengths): birden fazla çubuk boyu varsa (ör. 6500, 5000, 4700) her grup
  *     sığdığı EN KISA boydan kesilir; çubuk maliyeti boyuyla orantılıdır. P.L en uzun boydur.
+ *   - Stok adedi (stock, isteğe bağlı): bir boydan en çok kaç çubuk kullanılabileceği. Sınır varsa
+ *     gruplar boylara dağıtılır (assignStock): kısa boyun stoğu biterse grup bir uzun boya geçer;
+ *     hiçbir boyda yer bulamayan grubun pozları KALANLAR'a kalır ve KALANLAR yalnızca listedir.
  *   - Adım = bir satır = TEK POZ (ölçü, adet). Varsayılan: her poz tam adediyle tek satır,
  *     tek kesim. İstenirse aynı poz aynı grupta birden çok satıra bölünebilir (multiStep);
  *     aynı ölçüdeki pozları tek kesimde birleştirme (mergeSameLength) iptal edildi, kapalı.
@@ -346,6 +354,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   const DEFAULTS = Object.freeze({
     L: 6500,          // çubuk boyu (mm); lengths verilirse en uzun stok boyu
     lengths: null,    // stok boyları (mm), ör. [6500, 5000, 4700]; verilmezse yalnızca L
+    stock: null,      // boy → en çok kaç çubuk (ör. { 5000: 40 }); verilmeyen boy sınırsız
     kerf: 4,          // testere payı (mm / kesim)
     safety: 5,        // emniyet payı (mm / çubuk)
     maxBundle: 50,    // tek seferde kesilebilecek en fazla parça
@@ -455,6 +464,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // En az grup toplamı kuralına takılıyor mu? Sınır, grubun kesildiği boya göredir:
   // en uzun boyda minSum, kısa boylarda aynı pay (boy − (P.L − minSum)).
   function isLowComp(P, c) { return P.minSum > 0 && c.sumLen < c.barLen - (P.L - P.minSum); }
+  // KALANLAR yalnızca liste mi? (en az grup toplamı kuralı ya da sınırlı stok varsa: onlar için
+  // yeni çubuk grubu yazılmaz)
+  function listOnly(P) { return P.minSum > 0 || !!P.limited; }
 
   function compileWithN(keys, n, P, cap) {
     const steps = [];
@@ -634,6 +646,42 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return { groups, bars, strokes, changes, cost, barUnits, matMm };
   }
 
+  // ---------------------------------------------------------------- sınırlı stok
+  /**
+   * Grupları stok boylarına dağıtır (yalnızca bir boyda adet sınırı varsa çağrılır).
+   * Her grup, sığdığı en kısa boydan başlayarak stoğu yeten ve (kural açıksa) en az grup toplamını
+   * sağlayan ilk boyu alır; hiçbiri yoksa 0 (yerleşemedi). Kısa boya ihtiyaç duyan gruplar önce
+   * gelir; aynı boyu isteyenlerde çubuk başına kazancı yüksek olan önceliklidir.
+   * Dönüş: { assign: Map(grup → boy | 0), remaining: Map(boy → kalan stok) }
+   */
+  function assignStock(state, cand) {
+    const P = state.P, ms = P.minSum > 0, slack = P.L - P.minSum;
+    const Ls = P.lengths.slice().sort((a, b) => a - b);
+    const remaining = new Map();
+    for (const L of Ls) remaining.set(L, P.stock && P.stock[L] != null ? P.stock[L] : Infinity);
+    const dens = new Map();
+    for (const gi of cand) {
+      const g = state.groups[gi];
+      let v = -g.comp.cost;
+      for (const p of g.parts) v += kalanCost(p, P);
+      dens.set(gi, v / g.comp.bars);
+    }
+    const order = cand.slice().sort((x, y) => state.groups[x].comp.barLen - state.groups[y].comp.barLen || dens.get(y) - dens.get(x) || x - y);
+    const assign = new Map();
+    for (const gi of order) {
+      const c = state.groups[gi].comp;
+      let got = 0;
+      for (const L of Ls) {
+        if (L < c.barLen || remaining.get(L) < c.bars) continue;
+        if (ms && c.sumLen < L - slack) continue;
+        got = L; break;
+      }
+      assign.set(gi, got);
+      if (got) remaining.set(got, remaining.get(got) - c.bars);
+    }
+    return { assign, remaining };
+  }
+
   // ---------------------------------------------------------------- durum ve değerlendirme
 
   const KALAN = -1;
@@ -673,34 +721,55 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (this.P.minSum > 0) for (const g of this.groups) if (this.isLow(g)) for (const p of g.parts) out.push(p);
       return out;
     }
+    // Grup serbest mi (pozları KALANLAR sayılıyor mu)? Sınırın altında kalmışsa ya da son
+    // değerlendirmede stoktan boy alamamışsa.
+    isFree(gi) {
+      const g = this.groups[gi];
+      if (!g.parts.length) return false;
+      if (this.isLow(g)) return true;
+      return !!(this.eval && this.eval.assign && this.eval.assign.get(gi) === 0);
+    }
     evaluate() {
-      const P = this.P, ms = P.minSum > 0;
+      const P = this.P, ms = P.minSum > 0, lo = listOnly(P);
       let cost = 0, bars = 0, strokes = 0, changes = 0, barUnits = 0, matMm = 0;
       const pool = [];
       const kal = this.kalanParts();
+      const cand = [];
       for (let gi = 0; gi < this.groups.length; gi++) {
         const g = this.groups[gi];
         if (g.parts.length === 0) continue;
         const c = g.comp;
         if (!c.feasible) return { cost: Infinity };
         if (ms && isLowComp(P, c)) { for (const p of g.parts) kal.push(p); continue; }
-        cost += c.cost; bars += c.bars; strokes += c.strokes; changes += c.changes;
-        barUnits += c.barUnits; matMm += c.bars * c.barLen;
-        for (const r of c.remnants) if (r.count > 0 && r.len > 0) pool.push({ count: r.count, len: r.len, group: gi, step: r.afterStep });
+        cand.push(gi);
       }
-      const kp = planKalan(kal, pool, P, ms);
+      // Sınırlı stok varsa gruplar boylara dağıtılır; boy alamayan grubun pozları KALANLAR sayılır.
+      const st = P.limited ? assignStock(this, cand) : null;
+      const placed = [];        // [grup, ek boy, grup, ek boy, …]
+      for (const gi of cand) {
+        const g = this.groups[gi], c = g.comp;
+        let extra = 0;          // stok yüzünden sığdığından uzun boydan kesiliyorsa aradaki fark
+        if (st) {
+          const L = st.assign.get(gi);
+          if (!L) { for (const p of g.parts) kal.push(p); continue; }
+          extra = L - c.barLen;
+        }
+        placed.push(gi, extra);
+        cost += c.cost + (extra ? P.wBar * c.bars * extra / P.L : 0);
+        bars += c.bars; strokes += c.strokes; changes += c.changes;
+        barUnits += c.bars * (c.barLen + extra) / P.L; matMm += c.bars * (c.barLen + extra);
+        for (const r of c.remnants) if (r.count > 0 && r.len + extra > 0) pool.push({ count: r.count, len: r.len + extra, group: gi, step: r.afterStep });
+      }
+      const kp = planKalan(kal, pool, P, lo);
       cost += kp.cost;
       if (P.wFill) {
         // KALANLAR'da kullanılmayan son kalanlar için doluluk ödülü (yalnızca gerçek hurda)
         const usedFinal = new Set();
         for (const e of kp.plan) usedFinal.add(e.bundle.group + ':' + e.bundle.step);
-        for (let gi = 0; gi < this.groups.length; gi++) {
-          const g = this.groups[gi];
-          if (!g.parts.length) continue;
-          const c = g.comp;
-          if (ms && isLowComp(P, c)) continue;
+        for (let i = 0; i < placed.length; i += 2) {
+          const gi = placed[i], c = this.groups[gi].comp;
           if (usedFinal.has(gi + ':' + c.steps.length)) continue;
-          const f = c.leftover / P.L;
+          const f = (c.leftover + placed[i + 1]) / P.L;
           cost -= P.wFill * c.remnants[c.remnants.length - 1].count * f * f;
         }
       }
@@ -711,7 +780,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const fbChanges = kp.fallback ? kp.fallback.changes : 0;
       cost += P.wWaste * (matMm + fbMm - this.totalPieceMm);
       return { cost, bars: bars + fbBars, barUnits: barUnits + fbUnits, matMm: matMm + fbMm, strokes: strokes + kp.strokes + fbStrokes, changes: changes + kp.changes + fbChanges, kp, kal,
-        groupBars: bars, groupBarUnits: barUnits, groupMatMm: matMm, groupStrokes: strokes, groupChanges: changes };
+        groupBars: bars, groupBarUnits: barUnits, groupMatMm: matMm, groupStrokes: strokes, groupChanges: changes,
+        assign: st ? st.assign : null, remaining: st ? st.remaining : null };
     }
     snapshot() {
       const s = { loc: new Map(this.loc), nPref: this.groups.map(g => g.nPref), cost: this.cost };
@@ -802,14 +872,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
    * maxSpread içinde kalan en kazançlı alt küme (sınırlı derinlik-öncelikli arama).
    * Kazanç = pozların KALANLAR maliyeti − grubun maliyeti; yalnızca kazançlı gruplar döner.
    * rng verilirse aday sırası hafifçe karıştırılır (her çağrıda başka çözüm).
+   * avail (Map boy → kalan stok) verilirse grup, stoğu yeten bir boya oturmak zorundadır.
    * Dönüş: { parts, gain } ya da null.
    */
-  function bestFill(P, seeds, cands, limit, rng) {
+  function bestFill(P, seeds, cands, limit, rng, avail) {
     const cap = P.L - P.safety, kerf = P.kerf;
     const slack = P.L - P.minSum;                     // her boyda izin verilen en çok açık (boy − toplam)
     const Ls = (P.lengths && P.lengths.length ? P.lengths : [P.L]).slice().sort((a, b) => a - b);
     // çubuk başı boy (testere payları dahil) per olan grubun sığdığı en kısa stok boyu
     const need = per => { for (let i = 0; i < Ls.length; i++) if (per <= Ls[i] - P.safety) return Ls[i]; return P.L; };
+    // stok sınırlıyken: sığan, stoğu hi çubuğa yeten ve toplamı sınırı tutan en kısa boy (yoksa 0)
+    const place = (per, hi, sum) => {
+      for (let i = 0; i < Ls.length; i++) {
+        const L = Ls[i];
+        if (per > L - P.safety || avail.get(L) < hi) continue;
+        if (sum >= L - slack) return L;
+      }
+      return 0;
+    };
     const S = P.maxSpread == null ? 9999 : P.maxSpread;
     const exact = P.mergeSameLength || P.multiStep;   // satır sayısı poz sayısına eşit değilse tam derleme gerekir
     let sum0 = 0, per0 = 0, lo0 = Infinity, hi0 = -Infinity, kc0 = 0;
@@ -854,7 +934,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // Bu pozlar en az barLen boyunda çubuk ister; poz eklendikçe gereken boy ancak büyür.
       // Geçerli olmak için toplam en az (boy − pay) olmalı.
       const barLen = need(per), minSum = barLen - slack;
-      if (sum >= minSum) score(lo, hi, kc, barLen);
+      if (sum >= minSum) {
+        const L = avail ? place(per, hi, sum) : barLen;
+        if (L) score(lo, hi, kc, L);
+      }
       const room = cap - per;
       for (let j = i; j < n; j++) {
         if (nodes > limit) return;
@@ -879,10 +962,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
    */
   function fillFree(state, limit, randomize) {
     const P = state.P, rng = state.rng;
-    for (const g of state.groups) {
-      if (!state.isLow(g)) continue;
+    const dissolve = g => {
       for (const p of g.parts) state.loc.set(p.id, KALAN);
       g.parts = []; g.comp = EMPTY; g.nPref = null;
+    };
+    for (const g of state.groups) if (state.isLow(g)) dissolve(g);
+    // Sınırlı stok: boy alamayan gruplar da dağıtılır; yeni gruplar kalan stoğa göre kurulur
+    let avail = null;
+    const asc = (P.lengths || [P.L]).slice().sort((a, b) => a - b), slack = P.L - P.minSum;
+    if (P.limited) {
+      const ev = state.evaluate();
+      if (ev.assign) {
+        for (const [gi, L] of ev.assign) if (!L) dissolve(state.groups[gi]);
+        avail = new Map(ev.remaining);
+      }
     }
     const free = state.kalanParts();
     if (randomize) {
@@ -894,10 +987,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (used.has(seed.id)) continue;
       const cands = [];
       for (const q of free) if (q !== seed && !used.has(q.id)) cands.push(q);
-      const r = bestFill(P, [seed], cands, limit, randomize ? rng : null);
+      const r = bestFill(P, [seed], cands, limit, randomize ? rng : null, avail);
       if (!r) continue;
       const comp = compileGroup(r.parts, P, null);
       if (!comp.feasible || isLowComp(P, comp)) continue;
+      if (avail) {
+        let L = 0;
+        for (const x of asc) {
+          if (x < comp.barLen || avail.get(x) < comp.bars || comp.sumLen < x - slack) continue;
+          L = x; break;
+        }
+        if (!L) continue;
+        avail.set(L, avail.get(L) - comp.bars);
+      }
       const gi = state.newGroupIndex(), g = state.groups[gi];
       g.parts = r.parts.slice(); g.comp = comp; g.nPref = null;
       for (const q of r.parts) { state.loc.set(q.id, gi); used.add(q.id); }
@@ -914,7 +1016,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (let i = 0; i < state.groups.length; i++) {
       const g = state.groups[i];
       if (!g.parts.length) continue;
-      if (state.isLow(g)) freeCount += g.parts.length; else valid.push(i);
+      if (state.isFree(i)) freeCount += g.parts.length; else valid.push(i);
     }
     for (const p of state.parts) if (state.loc.get(p.id) === KALAN) freeCount++;
     let k = (rng() * 4) | 0;
@@ -1265,17 +1367,55 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   // ---------------------------------------------------------------- sonuç üretimi
 
+  /**
+   * KALANLAR için gereken yeni çubuk tahmini. Parçalar tek tek, uzundan kısaya, ilk sığdığı çubuğa
+   * yerleştirilir (en uzun boyda); sonra her çubuk, içeriğinin sığdığı ve stoğu olan en kısa boya
+   * indirilir. Usta böyle kesmek zorunda değildir; sayı yol göstermek içindir.
+   * rem: Map(boy → kalan stok) ya da null (sınırsız). Stokta karşılığı olmayan çubuklar "short".
+   */
+  function estimateKalanBars(deficit, P, rem) {
+    const Ls = (P.lengths && P.lengths.length ? P.lengths : [P.L]).slice().sort((a, b) => a - b);
+    const cap = P.L - P.safety;
+    const pieces = [];
+    for (const d of deficit) {
+      const u = d.item.len + P.kerf;
+      for (let k = 0; k < d.count; k++) pieces.push(u);
+    }
+    pieces.sort((a, b) => b - a);
+    const bins = [];
+    for (const u of pieces) {
+      let placed = false;
+      for (let i = 0; i < bins.length; i++) if (bins[i] + u <= cap) { bins[i] += u; placed = true; break; }
+      if (!placed) bins.push(u);
+    }
+    bins.sort((a, b) => b - a);
+    const byLen = {};
+    let bars = 0, mm = 0, short = 0;
+    for (const used of bins) {
+      let L = 0;
+      for (const x of Ls) {
+        if (used > x - P.safety || (rem && rem.get(x) < 1)) continue;
+        L = x; break;
+      }
+      if (!L) { L = P.L; short++; } else if (rem) rem.set(L, rem.get(L) - 1);
+      byLen[L] = (byLen[L] || 0) + 1; bars++; mm += L;
+    }
+    return { byLen, bars, mm, short };
+  }
+
   function buildResult(state, material) {
-    const P = state.P, ms = P.minSum > 0;
+    const P = state.P, ms = listOnly(P);      // ms: KALANLAR yalnızca liste (kural ya da sınırlı stok)
     const ev = state.evaluate();
     const groups = [];
     const order = [];
-    // minSum açıkken toplamı sınırın altında kalan gruplar yazılmaz (pozları KALANLAR'dadır: ev.kal)
-    for (let gi = 0; gi < state.groups.length; gi++) if (state.groups[gi].parts.length && !state.isLow(state.groups[gi])) order.push(gi);
+    // Grubun kesileceği boy: sığdığı en kısa boy; stok sınırlıysa atanan boy (0 = boy alamadı)
+    const lenOf = gi => ev.assign ? ev.assign.get(gi) : state.groups[gi].comp.barLen;
+    // Toplamı sınırın altında kalan ya da stoktan boy alamayan gruplar yazılmaz (pozları KALANLAR'da: ev.kal)
+    for (let gi = 0; gi < state.groups.length; gi++) if (state.groups[gi].parts.length && !state.isLow(state.groups[gi]) && lenOf(gi)) order.push(gi);
     // sıralama: çubuk boyu uzundan kısaya, demet büyükten küçüğe, sonra en uzun ölçü uzundan kısaya
     order.sort((a, b) => {
       const ca = state.groups[a].comp, cb = state.groups[b].comp;
-      return cb.barLen - ca.barLen || cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
+      return lenOf(b) - lenOf(a) || cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
     });
     const gIndexOf = new Map();
     order.forEach((gi, i) => gIndexOf.set(gi, i + 1));
@@ -1287,32 +1427,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }));
     for (const gi of order) {
       const c = state.groups[gi].comp;
+      const extra = lenOf(gi) - c.barLen;      // stok yüzünden daha uzun boydan kesiliyorsa
       groups.push({
-        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, barLen: c.barLen, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
-        perBar: c.perBar, sumLen: c.sumLen, leftover: c.leftover, steps: mapSteps(c),
-        remnants: c.remnants.filter(r => r.count > 0 && r.len > 0),
+        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, barLen: c.barLen + extra, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
+        perBar: c.perBar, sumLen: c.sumLen, leftover: c.leftover + extra, steps: mapSteps(c),
+        remnants: c.remnants.map(r => Object.assign({}, r, { len: r.len + extra })).filter(r => r.count > 0 && r.len > 0),
       });
     }
     const kp = ev.kp;
     const kalanParts = ev.kal.slice().sort((a, b) => b.item.len - a.item.len || b.count - a.count || a.id - b.id);
-    // minSum açıkken artıktan çıkmayan KALANLAR için grup yazılmaz. Gereken yeni çubuk şöyle
-    // tahmin edilir: her poz kendi başına, bir çubuğa sığdığı kadar kesilir (2998 mm → 6500'lük
-    // çubuktan 2); birden fazla stok boyu varsa en az malzeme harcayan boy seçilir. Usta farklı
-    // pozları aynı çubukta birleştirirse daha az tutar.
+    // KALANLAR yalnızca listeyken artıktan çıkmayanlar için grup yazılmaz; gereken yeni çubuk
+    // estimateKalanBars ile tahmin edilir (stok sınırlıysa gruplardan artan stoğa göre).
     const estByLen = {};
-    let estBars = 0, estMm = 0;
-    if (ms) {
-      for (const d of kp.deficit) {
-        let bL = P.L, bBars = 0, bMm = Infinity;
-        for (const L of P.lengths || [P.L]) {
-          const per = Math.floor((L - P.safety) / (d.item.len + P.kerf));
-          if (per < 1) continue;
-          const nb = Math.ceil(d.count / per);
-          if (nb * L < bMm) { bMm = nb * L; bBars = nb; bL = L; }
-        }
-        if (!bBars) continue;
-        estBars += bBars; estMm += bMm; estByLen[bL] = (estByLen[bL] || 0) + bBars;
-      }
+    let estBars = 0, estMm = 0, estShort = 0;       // estShort: stokta karşılığı olmayan çubuk
+    if (ms && kp.deficit.length) {
+      const e = estimateKalanBars(kp.deficit, P, ev.remaining ? new Map(ev.remaining) : null);
+      estBars = e.bars; estMm = e.mm; estShort = e.short;
+      for (const k of Object.keys(e.byLen)) estByLen[k] = e.byLen[k];
     }
     const fbGroups = kp.fallback ? kp.fallback.groups.map((g, i) => ({
       no: groups.length + i + 1, bars: g.comp.bars, barLen: g.comp.barLen, strokes: g.comp.strokes, changes: g.comp.changes, spread: g.comp.spread || 0, perBar: g.comp.perBar,
@@ -1334,6 +1465,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       listOnly: ms,                       // true: KALANLAR yalnızca listedir, yeni çubuk grupları yazılmaz
       newBars: ms ? estBars : (kp.fallback ? kp.fallback.bars : 0),     // artıktan çıkmayanlar için (kural açıkken tahmini) yeni çubuk
       newBarsByLen: ms ? estByLen : fbByLen,                             // aynısı, stok boyuna göre
+      shortBars: estShort,                                               // bunun stokta karşılığı olmayan kısmı (sınırlı stok)
       fallbackGroups: fbGroups,
     };
     let pieces = 0;
@@ -1376,7 +1508,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       fallbackBars: kp.fallback ? kp.fallback.bars : 0,
       // stok boyları
       lengths: (P.lengths || [P.L]).slice(), barsByLen, kalanBarsByLen: kalan.newBarsByLen,
-      // minSum kuralı: yazılan gruplar ile KALANLAR ayrı ayrı
+      stock: Object.assign({}, P.stock || {}), stockShort: estShort,
+      // KALANLAR yalnızca liste olduğunda (kural ya da sınırlı stok): yazılan gruplar ile KALANLAR ayrı ayrı
       minSum: P.minSum || 0, listOnly: ms,
       groupPieces, groupPieceMm, groupMaterialMm,
       groupWastePct: groupMaterialMm ? (groupMaterialMm - groupPieceMm) / groupMaterialMm : 0,
@@ -1396,7 +1529,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   function validate(result) {
     const P = result.P, errors = [];
-    const ms = P.minSum > 0;
+    const ms = P.minSum > 0, lo = listOnly(P);
+    const stock = P.stock || {};
     const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
     const produced = new Map(); // part.id → adet (gruplarda + artık planında)
     const inGroup = new Map();  // part.id → gruplarda kesilen adet
@@ -1428,8 +1562,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (P.maxSpread != null && maxN - minN > P.maxSpread) errors.push(`Grup ${g.no}: adet farkı ${maxN - minN} > ${P.maxSpread}`);
       // Demetin bütün satırlarda kesilen çubukları en çok yeri kullanır: çubuğa sığmalı
       if (used > L - P.safety) errors.push(`Grup ${g.no}: çubuk boyu aşıldı (${used} > ${L - P.safety})`);
-      // Daha kısa bir stok boyuna sığıyorsa oradan kesilmeliydi
-      for (const x of Ls) if (x < L && used <= x - P.safety) errors.push(`Grup ${g.no}: ${x}'lik çubuğa sığarken ${L}'lik yazılmış`);
+      // Daha kısa bir stok boyuna sığıyorsa oradan kesilmeliydi (stoğu sınırlı boy dolmuş olabilir: o sayılmaz)
+      for (const x of Ls) if (x < L && used <= x - P.safety && stock[x] == null) errors.push(`Grup ${g.no}: ${x}'lik çubuğa sığarken ${L}'lik yazılmış`);
       if (ms && !g.fallback && g.sumLen < L - (P.L - P.minSum)) errors.push(`Grup ${g.no}: toplam ${g.sumLen} < en az grup toplamı ${L - (P.L - P.minSum)} (${L}'lik çubuk)`);
       if (g.fallback) continue;
       // artık havuzu: adet düzeylerine göre (derleyiciyle aynı kural)
@@ -1473,6 +1607,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (const g of allGroups) byLen[g.barLen] = (byLen[g.barLen] || 0) + g.bars;
     const sb = (result.stats && result.stats.barsByLen) || {};
     for (const k of Object.keys(byLen).concat(Object.keys(sb))) if ((byLen[k] || 0) !== (sb[k] || 0)) { errors.push(`Boy sayımı tutmuyor: ${k}'lik ${sb[k] || 0} yazıyor, gruplarda ${byLen[k] || 0}`); break; }
+    // Stok adedi aşılmamalı
+    for (const k of Object.keys(stock)) if ((byLen[k] || 0) > stock[k]) errors.push(`Stok aşıldı: ${k}'lik çubuktan ${byLen[k]} kullanılmış, stokta ${stock[k]} var`);
     // Her poz ya tam adediyle bir grupta kesilir ya da KALANLAR'da listelenir (ikisi birden olmaz).
     const listed = new Map();
     for (const k of result.kalan.parts) listed.set(k.part.id, (listed.get(k.part.id) || 0) + k.count);
@@ -1480,8 +1616,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (const d of result.kalan.deficit || []) if (d.part) lacking.set(d.part.id, (lacking.get(d.part.id) || 0) + d.count);
     for (const p of result.parts || []) {
       const got = produced.get(p.id) || 0;
-      if (ms && listed.has(p.id)) {
-        // minSum kuralı: KALANLAR yalnızca listedir. Poz hiçbir grupta olmamalı; artıktan kesilen
+      if (lo && listed.has(p.id)) {
+        // Kural ya da sınırlı stok: KALANLAR yalnızca listedir. Poz hiçbir grupta olmamalı; artıktan kesilen
         // adet + artıktan çıkmayan adet, poz adedine eşit olmalı.
         if (listed.get(p.id) !== p.count) errors.push(`Poz ${p.item.poz} (${p.item.order}): KALANLAR'da ${listed.get(p.id)} yazıyor, adet ${p.count}`);
         if (inGroup.get(p.id)) errors.push(`Poz ${p.item.poz} (${p.item.order}): hem grupta hem KALANLAR'da`);
@@ -1530,13 +1666,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     Ls = Ls.filter((x, i) => Ls.indexOf(x) === i).sort((a, b) => b - a);
     if (!Ls.length) Ls = [DEFAULTS.L];
     P.lengths = Ls; P.L = Ls[0];
+    // Stok adedi: yalnızca tanımlı boylar için, boş / geçersiz değer sınırsız demektir
+    const stock = {};
+    if (P.stock) for (const L of Ls) {
+      const raw = P.stock[L];
+      if (raw == null || raw === '') continue;
+      const v = Math.floor(Number(raw));
+      if (isFinite(v) && v >= 0) stock[L] = v;
+    }
+    P.stock = stock; P.limited = Object.keys(stock).length > 0;
     const rng = mulberry32(P.seed >>> 0);
     // Çubuğa sığmayan (ölçü + testere payı > boy − emniyet) pozlar plana alınamaz; ayrı listelenir.
     const allItems = items, capLen = P.L - P.safety;
     const oversize = allItems.filter(it => it.len + P.kerf > capLen);
     items = oversize.length ? allItems.filter(it => it.len + P.kerf <= capLen) : allItems;
     const parts = makeParts(items, P);
-    const ms = P.minSum > 0;
+    const ms = P.minSum > 0;     // pencere araması (fill) yalnızca en az grup toplamı kuralında kullanılır
     const state = new State(parts, P, rng);
     state.nextPartId = parts.length + 1;
     constructInitial(state);
@@ -1590,7 +1735,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return result;
   }
 
-  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, pickBar, KALAN };
+  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, pickBar, assignStock, estimateKalanBars, KALAN };
 });
 
 </script>
@@ -2168,7 +2313,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const rows = [];
     if (!kalan.parts.length) return rows;
     // kural açıkken KALANLAR yalnızca listedir; gereken yeni çubuk tahmini başlığın yanında yazar
-    rows.push({ kind: 'header', A: 'KALANLAR', big: true, F: kalan.listOnly && kalan.newBars ? `≈ ${kalan.newBars} çubuk` : '' });
+    rows.push({ kind: 'header', A: 'KALANLAR', big: true, F: kalan.listOnly && kalan.newBars ? `≈ ${kalan.newBars} çubuk` + (kalan.shortBars ? ' (stok yetmiyor)' : '') : '' });
     const src = new Map();
     for (const e of kalan.plan) for (const s of e.steps) {
       const m = src.get(s.part.id) || new Map();
@@ -2459,14 +2604,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const ws = wb.addWorksheet('ÖZET');
     plainView(ws, false);
     ws.getColumn(1).width = 26; ws.getColumn(2).width = 12;
-    for (let c = 3; c <= 26; c++) ws.getColumn(c).width = 12;
-    ws.getColumn(12).width = 34; ws.getColumn(20).width = 28;
+    for (let c = 3; c <= 27; c++) ws.getColumn(c).width = 12;
+    ws.getColumn(3).width = 30; ws.getColumn(12).width = 34; ws.getColumn(20).width = 28;
     ws.getCell('A1').value = 'KESİM OPTİMİZASYONU – ÖZET'; ws.getCell('A1').font = { name: FONT, size: 14, bold: true };
     ws.getCell('A2').value = 'Oluşturma: ' + new Date().toLocaleString('tr-TR');
     let r = 4;
     const hdr = ['Parça', 'Renk', 'Çubuk boyları', 'Demet', 'En az grup toplamı', 'Poz', 'Parça adedi', 'Toplam (m)',
       'Grup', 'Gruplardaki poz', 'Grup çubuğu', 'Boya göre çubuk', 'Grup firesi %', 'Eşit adetli grup', 'En çok adet farkı', 'Demet bozma',
-      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'KALANLAR boya göre', 'Toplam çubuk', 'Malzeme (m)', 'Toplam fire %', 'Maliyet'];
+      'KALANLAR poz', 'KALANLAR parça', 'KALANLAR çubuğu', 'KALANLAR boya göre', 'Stok dışı çubuk', 'Toplam çubuk', 'Malzeme (m)', 'Toplam fire %', 'Maliyet'];
     const byLenText = o => Object.keys(o || {}).map(Number).sort((a, b) => b - a).map(L => `${L} × ${o[L]}`).join(' · ');
     hdr.forEach((h, i) => { const c = ws.getCell(r, i + 1); c.value = h; c.font = { name: FONT, bold: true }; c.border = BORDER; c.alignment = { wrapText: true, vertical: 'middle' }; });
     ws.getRow(r).height = 30;
@@ -2475,12 +2620,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const st = x.result.stats, P = x.result.P;
       const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
       const writtenBars = Object.values(st.barsByLen || {}).reduce((a, b) => a + b, 0);   // yazılan bütün grupların çubuğu
-      const vals = [x.meta.desc, x.meta.color, Ls.length > 1 ? Ls.join(' / ') : P.L, P.maxBundle,
+      const stock = P.stock || {};
+      const limited = Object.keys(stock).length > 0;
+      // çubuk boyları: seçili boylar; stok adedi girilmişse yanında
+      const lensText = Ls.length > 1 || limited ? Ls.map(L => L + (stock[L] != null ? ` (${stock[L]} adet)` : '')).join(' / ') : P.L;
+      const vals = [x.meta.desc, x.meta.color, lensText, P.maxBundle,
         P.minSum > 0 ? (Ls.length > 1 ? Ls.map(L => L - (P.L - P.minSum)).join(' / ') : P.minSum) : '–',
         x.result.items.length, st.pieces, +(st.pieceMm / 1000).toFixed(1),
         st.groupCount + (st.listOnly ? 0 : (x.result.kalan.fallbackGroups || []).length), st.groupPozCount, writtenBars, byLenText(st.barsByLen),
         +(st.groupWastePct * 100).toFixed(2), st.equalGroups, st.spreadMax, st.groupChanges,
-        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : 0, st.listOnly ? byLenText(st.kalanBarsByLen) : '',
+        st.kalanCount, st.kalanPieces, st.listOnly ? st.kalanNewBars : 0, st.listOnly ? byLenText(st.kalanBarsByLen) : '', st.stockShort || 0,
         st.bars, +(st.materialMm / 1000).toFixed(1), +(st.wastePct * 100).toFixed(2), Math.round(st.cost)];
       vals.forEach((v, i) => { const c = ws.getCell(r, i + 1); c.value = v; c.border = BORDER; });
       r++;
@@ -2488,7 +2637,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     r++;
     const notes = [
       'Grup çubuğu ve grup firesi yalnızca yazılan grupları kapsar. Birden fazla çubuk boyu varsa her grup sığdığı en kısa boydan kesilir ("Boya göre çubuk": boy × adet).',
-      'KALANLAR çubuğu: artık demetlerinden çıkmayan KALANLAR pozları için gereken yeni çubuk. En az grup toplamı kuralı açıkken tahminidir: her poz kendi başına, bir çubuğa sığdığı kadar kesilirse (bu pozlar için grup yazılmaz).',
+      'KALANLAR çubuğu: artık demetlerinden çıkmayan KALANLAR pozları için gereken yeni çubuk. KALANLAR yalnızca listeyken (en az grup toplamı kuralı ya da stok adedi sınırı) tahminidir: parçalar tek tek, çubuklara sığdığı kadar yerleştirilirse.',
+      'Stok adedi girilmiş boyda o adet aşılmaz: grup bir uzun boya geçer, hiçbir boyda yer kalmazsa pozları KALANLAR\'a yazılır. "Stok dışı çubuk": KALANLAR için gereken ama stokta karşılığı olmayan çubuk.',
       'Toplam çubuk = grup çubuğu + KALANLAR çubuğu. Malzeme = çubuk adedi × çubuk boyu toplamı; fire buna göredir.',
     ];
     for (const t of notes) { ws.getCell(r, 1).value = t; ws.getCell(r, 1).font = GRAY; r++; }
@@ -2822,12 +2972,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // En az grup toplamı: lamelde çubuk boyunun 250 mm altı (6500 → 6250); diğer parçalarda kural yok (0).
   const MIN_SUM_SLACK = 250;
   function defaultMinSum(m, L) { return m.type === 'lamel' ? Math.max(0, L - MIN_SUM_SLACK) : 0; }
-  // lengths: bu parçanın stok boyları (büyükten küçüğe); L en uzunu. En az grup toplamı en uzun boy içindir.
+  // Parça ayarı. opts: genel listedeki her çubuk boyu için { len, on, qty } — on: bu parça o boydan
+  // kesilebilir mi (seçenek); qty: o boydan stokta kaç çubuk var (boş = sınır yok). Varsayılan: yalnızca
+  // en uzun boy (6500) işaretli. Türetilenler: lengths (işaretli boylar, büyükten küçüğe), L (en uzunu),
+  // stock (adedi girilmiş boylar). En az grup toplamı işaretli en uzun boy içindir.
+  const CFG_VERSION = 2;
+  function syncCfg(cfg) {
+    if (!cfg.opts.some(o => o.on)) cfg.opts[0].on = true;          // en az bir boy seçili olmalı
+    cfg.lengths = cfg.opts.filter(o => o.on).map(o => o.len).sort((a, b) => b - a);
+    cfg.L = cfg.lengths[0];
+    cfg.stock = {};
+    for (const o of cfg.opts) if (o.on && o.qty != null) cfg.stock[o.len] = o.qty;
+    return cfg;
+  }
   // Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) varsayılan olarak kapalı gelir.
   function defaultCfg(m, defLs) {
     const cap = defLs[0] - (Number($('pSafety').value) || 0), kerf = Number($('pKerf').value) || 0;
     const fits = m.items.some(it => it.len + kerf <= cap);
-    return { on: !!m.defaultOn && fits, lengths: defLs.slice(), L: defLs[0], bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defLs[0]) };
+    return syncCfg({ v: CFG_VERSION, on: !!m.defaultOn && fits, opts: defLs.map((len, k) => ({ len, on: k === 0, qty: null })), bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defLs[0]) });
+  }
+  // Tablodaki "Çubuk boyları" hücresi: her boy için işaret kutusu, işaretliyse yanında adet alanı
+  function lensCell(m, i) {
+    return m.cfg.opts.map(o => `<label class="lenopt${o.on ? ' on' : ''}"><input type="checkbox" data-mi="${i}" data-mk="lenOn" data-len="${o.len}"${o.on ? ' checked' : ''}>${fmt(o.len)}`
+      + (o.on ? `<input type="number" class="qty" min="0" step="1" placeholder="adet" data-mi="${i}" data-mk="lenQty" data-len="${o.len}" value="${o.qty == null ? '' : o.qty}" title="Bu boydan stokta kaç çubuk var? Boş bırakılırsa sınır yoktur.">` : '')
+      + '</label>').join('');
   }
   // Kısa boylarda geçerli sınırlar: "5.000 → 4.750 · 4.700 → 4.450"
   function minSumHint(cfg) {
@@ -2851,7 +3019,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         <td>${m.pozCount}</td>
         <td>${fmt(m.pieces)}</td>
         <td>${(m.totalMm / 1000).toFixed(1)} m</td>
-        <td><input type="text" class="lens" data-mi="${i}" data-mk="lengths" value="${m.cfg.lengths.join(', ')}" title="Bu parçanın stok boyları (mm), virgülle. Her grup sığdığı en kısa boydan kesilir."></td>
+        <td class="lenscell">${lensCell(m, i)}</td>
         <td><input type="number" step="1" min="1" data-mi="${i}" data-mk="bundle" value="${m.cfg.bundle}"></td>
         <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="En uzun çubuk için: ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok">${minSumHint(m.cfg) ? '<br><span class="hint">' + minSumHint(m.cfg) + '</span>' : ''}</td>
       </tr>`).join('');
@@ -2860,21 +3028,28 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyları</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
         <div class="matfoot">İşaretli parçalar optimize edilir; demet = tek seferde kesilen en fazla adet.
-          <b>Çubuk boyları:</b> parçanın stokta bulunan boyları, virgülle (ör. 6500, 5000, 4700). Her grup sığdığı en kısa boydan kesilir;
-          sonuçta hangi boydan kaç çubuk kesileceği yazar. Bir parça yalnızca tek boyda geliyorsa buraya yalnızca o boyu yazın.
+          <b>Çubuk boyları:</b> parçanın kesilebileceği boyları işaretleyin; ${fmt(defaultLengths()[0])} işaretli gelir. İşaretli boyun yanındaki
+          <b>adet</b>, o boydan stokta kaç çubuk olduğudur (boş = sınır yok). Her grup işaretli boylardan sığdığı en kısasından kesilir;
+          adedi biten boyun yerine bir uzunu kullanılır, hiçbirinde yer kalmazsa pozlar KALANLAR'a yazılır. Sonuçta hangi boydan kaç çubuk kesileceği yazar.
           <b>En az grup toplamı:</b> bir grubun ölçüleri toplamı bu değerin altında kalıyorsa o grup yazılmaz, pozları KALANLAR'a bırakılır
           (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boylarını girin.' : ''}</div>`;
       box.querySelectorAll('input[data-mi]').forEach(inp => inp.addEventListener('change', e => {
         const m = app.mats[Number(e.target.dataset.mi)], k = e.target.dataset.mk;
         if (k === 'on') m.cfg.on = e.target.checked;
-        else if (k === 'lengths') {
-          const lens = parseLengths(e.target.value);
-          if (lens.length) {
-            // en az grup toplamı en uzun boyu izliyorsa (boy − 250) yeni boya göre güncellenir
-            const follows = m.cfg.minSum > 0 && m.cfg.minSum === Math.max(0, m.cfg.L - MIN_SUM_SLACK);
-            m.cfg.lengths = lens; m.cfg.L = lens[0];
-            m.cfg.minSum = follows ? Math.max(0, m.cfg.L - MIN_SUM_SLACK) : Math.max(0, Math.min(m.cfg.minSum, m.cfg.L - 1));
+        else if (k === 'lenOn' || k === 'lenQty') {
+          const o = m.cfg.opts.find(x => x.len === Number(e.target.dataset.len));
+          // en az grup toplamı en uzun boyu izliyorsa (boy − 250) yeni en uzun boya göre güncellenir
+          const follows = m.cfg.minSum > 0 && m.cfg.minSum === Math.max(0, m.cfg.L - MIN_SUM_SLACK);
+          if (k === 'lenOn') {
+            o.on = e.target.checked;
+            if (!o.on) o.qty = null;
+            if (!m.cfg.opts.some(x => x.on)) { o.on = true; toast('En az bir çubuk boyu işaretli olmalı.'); }
+          } else {
+            const t = String(e.target.value).trim(), v = Math.floor(Number(t));
+            o.qty = t === '' || !isFinite(v) || v < 0 ? null : v;
           }
+          syncCfg(m.cfg);
+          m.cfg.minSum = follows ? Math.max(0, m.cfg.L - MIN_SUM_SLACK) : Math.max(0, Math.min(m.cfg.minSum, m.cfg.L - 1));
         } else {
           const v = Math.round(Number(e.target.value) || 0);
           if (k === 'minSum') m.cfg.minSum = Math.max(0, Math.min(v, m.cfg.L - 1));
@@ -2883,7 +3058,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         }
         matCfgSave(m.key, m.cfg);
         if (k === 'on') e.target.closest('tr').classList.toggle('off', !m.cfg.on);
-        if (k === 'lengths' || k === 'minSum') { renderMaterials(); return; }
+        if (k === 'lenOn' || k === 'lenQty' || k === 'minSum') { renderMaterials(); return; }
         updateRunHint();
       }));
     }
@@ -2917,12 +3092,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const def = defaultCfg(m, defLs);
       const sv = saved[m.key];
       if (sv) {
-        // Eski kayıtlarda tek boy (L) vardı: 6500 ise yeni boy listesi uygulanır, elle değiştirilmişse o boy korunur
-        let lens = Array.isArray(sv.lengths) ? parseLengths(sv.lengths.join(',')) : [];
-        if (!lens.length) lens = Number(sv.L) && Number(sv.L) !== 6500 ? [Math.round(Number(sv.L))] : def.lengths.slice();
-        const L = lens[0];
+        // Boy seçenekleri genel listeye göre kurulur; kayıtlı seçim ve adetler (aynı sürümse) üstüne işlenir.
+        // Eski sürüm kayıtlarında (tek boy ya da boy listesi) seçim varsayılana döner: yalnızca en uzun boy.
+        const opts = def.opts.map(o => {
+          const old = sv.v === CFG_VERSION && Array.isArray(sv.opts) ? sv.opts.find(x => x && Number(x.len) === o.len) : null;
+          return old ? { len: o.len, on: !!old.on, qty: old.on && old.qty != null && isFinite(Number(old.qty)) ? Math.max(0, Math.floor(Number(old.qty))) : null } : o;
+        });
+        const cfg = syncCfg({ v: CFG_VERSION, on: !!sv.on, opts, bundle: Number(sv.bundle) || def.bundle, minSum: 0 });
         // minSum alanı olmayan eski kayıtlarda varsayılan (lamel: boy − 250) uygulanır
-        m.cfg = { on: !!sv.on, lengths: lens, L, bundle: Number(sv.bundle) || def.bundle, minSum: sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Math.min(Number(sv.minSum), L - 1)) : defaultMinSum(m, L) };
+        cfg.minSum = sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Math.min(Number(sv.minSum), cfg.L - 1)) : defaultMinSum(m, cfg.L);
+        m.cfg = cfg;
       } else m.cfg = def;
     }
     // sekme / sayfa adı: mergeProjects'in verdiği ayırt edici kısa ad (LAMEL EKO, LAMEL STANDART …)
@@ -3028,7 +3207,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const lines = mats.map(m => {
       const div = document.createElement('div'); div.className = 'pline';
       const sc = timeScale(m);
-      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · çubuk ${m.cfg.lengths.join(' / ')} · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
+      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · çubuk ${m.cfg.lengths.map(x => x + (m.cfg.stock[x] != null ? ' (' + m.cfg.stock[x] + ' adet)' : '')).join(' / ')} · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
       prog.appendChild(div); return div;
     });
     const t0 = performance.now();
@@ -3036,7 +3215,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       for (let i = 0; i < mats.length; i++) {
         if (app.abort) break;
         const m = mats[i];
-        const P = { L: m.cfg.L, lengths: m.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
+        const P = { L: m.cfg.L, lengths: m.cfg.lengths.slice(), stock: Object.assign({}, m.cfg.stock), kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
         const bar = lines[i].querySelector('.pbar > div'), txt = lines[i].children[2];
         const scale = timeScale(m);
         const res = await optimizeMaterial(m, P, Math.round(params.timeMs * scale), (frac, best, n) => { bar.style.width = (frac * 100).toFixed(0) + '%'; txt.textContent = `${(frac * 100).toFixed(0)}% · en iyi maliyet ${isFinite(best) ? Math.round(best) : '–'} · ${n} paralel`; });
@@ -3081,7 +3260,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (app.abort) break;
         const r = runs[i];
         btn.textContent = `Karşılaştırılıyor… ${i + 1}/${runs.length}`;
-        const P = Object.assign({ L: mat.cfg.L, lengths: mat.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
+        const P = Object.assign({ L: mat.cfg.L, lengths: mat.cfg.lengths.slice(), stock: Object.assign({}, mat.cfg.stock), kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
           mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit }, weightParams(r.w));
         const res = await optimizeMaterial(mat, P, per, () => {});
         rows.push({ name: r.name, w: r.w, preset: r.preset, st: res.stats });
@@ -3166,7 +3345,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const def = k.listOnly ? '' : (k.deficit || []).map(d => `<tr><td colspan="6" class="err">Eksik: poz ${esc(d.item.poz)} × ${d.count} (${fmt(d.item.len)} mm) artıktan çıkmadı → yeni çubuk grubu</td></tr>`).join('');
     const st = res.stats;
     const cap = k.listOnly
-      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · toplamı sınıra ulaşan gruba giremeyenler${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + ((res.P.lengths || []).length > 1 ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`
+      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · ${res.P.minSum > 0 ? 'toplamı sınıra ulaşan gruba giremeyenler' : 'stoktaki çubuklara sığmayanlar'}${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + ((res.P.lengths || []).length > 1 ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`
       : `${k.parts.length} poz · artıklardan ${k.strokes} kesim`;
     return `<div class="gbox kalan"><table class="g"><caption>KALANLAR <span class="m">${cap}</span></caption>
       <thead><tr><th>Sipariş</th><th>Müşteri</th><th>POZ</th><th>ADET</th><th>ÖLÇÜ</th><th style="text-align:left">Kaynak</th></tr></thead><tbody>${rows}${def}</tbody></table></div>`;
@@ -3194,7 +3373,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const slack = res.P.L - res.P.minSum;
     const minText = multiLen ? res.P.lengths.map(x => fmt(x) + ' → ' + fmt(x - slack)).join(' · ') : fmt(res.P.minSum);
     const stats = (st.listOnly ? [
-      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz · grup toplamı ≥ ${multiLen ? 'boy − ' + fmt(slack) : fmt(res.P.minSum)}`],
+      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz` + (res.P.minSum > 0 ? ` · grup toplamı ≥ ${multiLen ? 'boy − ' + fmt(slack) : fmt(res.P.minSum)}` : '')],
       ['Eşit adetli grup', `${st.equalGroups}/${st.groupCount}`, `en çok fark ${st.spreadMax} · ${lim}`],
       ['Grup çubuğu', fmt(st.groupBars), `${multiLen ? byLenText(st.barsByLen) + ' · ' : ''}fire ${(st.groupWastePct * 100).toFixed(1)} %`],
       ['KALANLAR', st.kalanCount + ' poz', `${fmt(st.kalanPieces)} parça${st.kalanNewBars ? ' · ≈ ' + (multiLen ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`],
@@ -3213,9 +3392,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const groups = res.groups.map(g => renderGroup(g, res)).join('') + (res.kalan.fallbackGroups || []).map(g => renderGroup(g, res)).join('') + renderKalan(res);
     $('resBody').innerHTML = `<div class="stats">${stats}</div>
       <div class="valid ${v.ok ? 'ok' : 'bad'}">${v.ok ? (st.listOnly
-        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; yazılan her grubun toplamı en az ${multiLen ? '(' + minText + ')' : fmt(res.P.minSum) + ' mm'}, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.`
+        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; ${res.P.minSum > 0 ? 'yazılan her grubun toplamı en az ' + (multiLen ? '(' + minText + ')' : fmt(res.P.minSum) + ' mm') + ', ' : ''}hiçbir çubuk boyu${Object.keys(st.stock || {}).length ? ' ve stok adedi' : ''} aşılmadı, demet ve adet farkı sınırları korundu.`
         : '✔ Doğrulama: her pozun adedi tam, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.') : '✖ Doğrulama hataları: ' + esc(v.errors.slice(0, 5).join(' | '))}</div>
-      ${st.listOnly && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${multiLen ? 'sınıra (' + minText + ')' : fmt(res.P.minSum) + " mm'ye"} ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
+      ${st.stockShort ? `<div class="valid bad">⚠ Stok yetmiyor: KALANLAR'daki pozlar için stokta karşılığı olmayan ≈ ${st.stockShort} çubuk daha gerekir (${fmt(res.P.L)}'lik hesabıyla). Girilen adetler: ${Object.keys(st.stock).map(Number).sort((a, b) => b - a).map(x => fmt(x) + ' × ' + st.stock[x]).join(' · ')}.</div>` : ''}
+      ${st.listOnly && res.P.minSum > 0 && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${multiLen ? 'sınıra (' + minText + ')' : fmt(res.P.minSum) + " mm'ye"} ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
       ${(res.oversize || []).length ? `<div class="valid bad">⚠ ${res.oversize.length} poz çubuk boyundan (${fmt(res.P.L)} mm) uzun olduğu için plana alınmadı: ${res.oversize.slice(0, 8).map(o => 'poz ' + esc(o.poz) + ' (' + o.count + ' × ' + fmt(o.len) + ' mm)').join(', ')}${res.oversize.length > 8 ? ' …' : ''}</div>` : ''}
       <div class="cmp">Maliyet ${Math.round(st.cost)} (başlangıç ${Math.round(res.initialCost)}) · ${fmt(res.iterations)} iterasyon · ${esc(x.mat.desc)} ${esc(x.mat.color)}</div>
       <div class="breakdown">${costBreakdown(res)}</div>
@@ -3303,7 +3483,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         try {
           const items = [];
           for (let i = 1; i <= 24; i++) items.push({ order: '1', customer: 'T', poz: i, len: 1200 + (i % 7) * 97, count: 18 + (i % 3) });
-          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, lengths: [6500], L: 6500, bundle: 50, minSum: 0 } };
+          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, lengths: [6500], L: 6500, stock: {}, bundle: 50, minSum: 0 } };
           const P = Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 50 });
           const res = await optimizeMaterial(mat, P, 1500, () => {});
           let ls = true;

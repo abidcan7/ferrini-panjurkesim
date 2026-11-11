@@ -11,7 +11,7 @@ Araç 11.11'de Atlas içinde çalışır halde görüldü.
 
 ## Şu an ne durumda
 
-Çalışıyor ve gerçek dosyalarla doğrulandı. 203 kontrolün tamamı hem Node'da hem headless Chrome'da geçiyor.
+Çalışıyor ve gerçek dosyalarla doğrulandı. 214 kontrolün tamamı hem Node'da hem headless Chrome'da geçiyor.
 
 | Konu | Durum |
 |---|---|
@@ -20,7 +20,7 @@ Araç 11.11'de Atlas içinde çalışır halde görüldü.
 | Çok proje | Birden fazla dosya tek havuzda optimize ediliyor |
 | Satır düzeni | Her satır tek poz; grup içinde ölçüye göre büyükten küçüğe (11.11) |
 | Öncelik | Grup içi adet farkı en çok 4, ideal eşit |
-| Çubuk boyları | 6500 / 5000 / 4700: her grup sığdığı en kısa boydan; boy başına çubuk sayısı yazılıyor (11.11) |
+| Çubuk boyları | Parça başına seçenek (6500 / 5000 / 4700; 6500 işaretli gelir) + isteğe bağlı stok adedi; her grup işaretli boylardan sığdığı en kısasından; boy başına çubuk sayısı yazılıyor (11.11) |
 | En az grup toplamı | Lamelde 6250 (kısa boylarda 4750 / 4450): altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır |
 | Çıktı | Excel: parça başına sayfa + ÖZET + POZ LİSTESİ + ARTIK PLANI |
 | Baskı | A4 dikey, sayfa başına iki sütun, elle sayfa sonları; Excel'in PDF çıktısıyla doğrulandı |
@@ -43,12 +43,14 @@ Araç 11.11'de Atlas içinde çalışır halde görüldü.
 | 11.11 | **Grup içinde satırlar ölçüsü büyük olandan küçüğe sıralanır** (elle yapılan örnekte de 30 grubun 30'u böyle). "Demet yalnızca küçülür" kuralı bununla kalktı: adedi az olan satırda aradaki çubuklar kenarda bekler |
 | 11.11 | **Çubuk boyları 6500 + 5000 + 4700;** çıktıda hangi boydan kaç çubuk kesileceği yazar |
 | 11.11 | **Kutu profilleri tanınır** (SK-165 / 180 / 205, ÖN 45 ve AR 90) ve optimize edilir; tanınmayan parça kalmamalı |
+| 11.11 | **Çubuk boyları her parça için "seçenek ve adet":** boylar işaretlenir, 6500 kendiliğinden işaretli gelir (hangi parçanın hangi boyda geldiği sorusunun cevabı) |
 
 Varsayılan ağırlıklar: adet farkı 2 · kesim 10 · çubuk 4 · demet bozma 1 · KALANLAR 12.
 
 Benim yaptığım varsayımlar (teyit bekliyor, aşağıda "Açık konular"):
-üç çubuk boyu **bütün parçalarda** varsayılan; kısa boylarda en az grup toplamı aynı payla (250 mm)
-hesaplanıyor; kutu, kutu kapağı, köşebent ve pano U tek tek kesiliyor (demet 1).
+"adet" o boydan **stokta kaç çubuk olduğu** olarak yorumlandı (araç bu adedi aşmaz, boş = sınır yok);
+kısa boylarda en az grup toplamı aynı payla (250 mm) hesaplanıyor; kutu, kutu kapağı, köşebent ve
+pano U tek tek kesiliyor (demet 1).
 
 ## Çubuk boyları
 
@@ -58,9 +60,19 @@ hesaplanıyor; kutu, kutu kapağı, köşebent ve pano U tek tek kesiliyor (deme
 - Sonuçta `stats.barsByLen` (yazılan grupların çubukları, boya göre) ve `stats.kalanBarsByLen`
   (KALANLAR tahmini). Excel'de sayfanın başında "Çubuk: 6500 × 592 · 5000 × 131", grup başlığında
   "GRUP 3 · 5000"; gruplar boya göre uzundan kısaya dizilir.
-- Arayüz: genel "Çubuk boyları" alanı (varsayılan `6500, 5000, 4700`) ve parça tablosunda parça başına
-  boy listesi. Tek boy yazılırsa eski davranış.
-- Etkisi (lamel, kural açık): 21542'de yalnızca 6500 ile 154/156 poz gruplarda, üç boyla 156/156.
+- Arayüz: genel "Çubuk boyları" alanı seçenek listesini verir (varsayılan `6500, 5000, 4700`). Parça
+  tablosunda her parçanın satırında her boy için işaret kutusu; **yalnızca en uzun boy (6500) işaretli
+  gelir**. İşaretli boyun yanında adet alanı (stok; boş = sınır yok). Kayıt: `cfg.opts`
+  (`{len, on, qty}`), türetilen `lengths` / `L` / `stock`; `CFG_VERSION = 2` (eski kayıtlarda seçim
+  varsayılana döner).
+- **Stok adedi** (`P.stock`, boy → en çok çubuk): bir boyda sınır varsa `assignStock` grupları boylara
+  dağıtır (kısa boya ihtiyaç duyan ve çubuk başına kazancı yüksek grup önce); kısa boyun stoğu
+  biterse grup bir uzun boya geçer (kural açıksa orada da sınırı tutmalı), hiçbirinde yer yoksa
+  pozları KALANLAR'a kalır. Sınır varken KALANLAR yalnızca listedir (`listOnly`), tahminde stokta
+  karşılığı olmayan çubuklar `stats.stockShort` olarak ayrıca verilir ve ekranda uyarı çıkar.
+  Pencere araması (`bestFill`) kalan stoğu bilir; doğrulayıcı stok aşımını denetler.
+- Etkisi (lamel, kural açık): 21542'de yalnızca 6500 ile 154/156 poz gruplarda, üç boyla 156/156;
+  4700 × 100 ve 5000 × 40 adet sınırıyla yine 156/156 (4700 × 37 · 5000 × 40 · 6500 × 1.369).
   Kısa parçalı alt parça ve tamburda fire düşüyor (dört projede tambur %4,4 → %1,6).
 
 ## En az grup toplamı kuralı
@@ -74,8 +86,9 @@ hesaplanıyor; kutu, kutu kapağı, köşebent ve pano U tek tek kesiliyor (deme
   `fillIteration`: birkaç grubu dağıtıp yeniden kurma). Sınırın altındaki gruplar aramada
   "bekleme alanı" sayılır, sonuca yazılmaz.
 - KALANLAR yalnızca listedir: onlar için yeni çubuk grubu yazılmaz. Kenarda bekleyen çubuklardan
-  kesilebilenler notta ve ARTIK PLANI'nda görünür. Çubuk tahmini: her poz kendi başına, en az
-  malzeme harcayan boydan, bir çubuğa sığdığı kadar kesilirse.
+  kesilebilenler notta ve ARTIK PLANI'nda görünür. Çubuk tahmini (`estimateKalanBars`): parçalar
+  tek tek, uzundan kısaya, ilk sığdığı çubuğa yerleştirilir; sonra her çubuk içeriğinin sığdığı
+  (ve stoğu olan) en kısa işaretli boya indirilir.
 - Adedi hiçbir pozla uyuşmayan ya da boyu tutmayan pozlar için grup kurulamaz; küçük projede bütün
   pozların KALANLAR'a düşmesi beklenen bir sonuçtur (ekran bunu uyarıyla söyler).
 
@@ -106,26 +119,31 @@ onun sağı ölçü. Başlıklı Excel'de sütunlar başlıktan okunuyor.
 
 ## Ölçülen sonuçlar
 
-Varsayılan ayarlarla (üç çubuk boyu, lamelde kural açık; parça başına 300 bin iterasyon × 6 tohum).
+Lamelde kural açık; parça başına 300 bin iterasyon × 6 tohum.
 
-Dört gerçek proje birlikte (24714 + 23876 + 24221 + 24543, toplam 94 poz) —
-`ÖRNEK ÇIKTI - 4 proje birlikte (araç).xlsx`:
+Dört gerçek proje birlikte (24714 + 23876 + 24221 + 24543, toplam 94 poz), varsayılan ayar
+(yalnızca 6500 işaretli) — `ÖRNEK ÇIKTI - 4 proje birlikte (araç).xlsx`:
 
-| Parça | Poz | Grup | Gruplardaki poz | Çubuk (boy × adet) | Grup firesi | KALANLAR |
+| Parça | Poz | Grup | Gruplardaki poz | Çubuk (6500) | Grup firesi | KALANLAR |
 |---|---|---|---|---|---|---|
-| Lamel EKO | 88 | 18 | 74 | 6500 × 592 · 5000 × 131 | %1,4 | 14 poz, ≈ 6500 × 64 · 4700 × 22 |
-| Lamel STANDART | 6 | 0 | 0 | – | – | 6 poz, ≈ 4700 × 230 · 6500 × 23 |
-| Dikme | 94 | 37 | 94 | 6500 × 50 · 5000 × 2 · 4700 × 22 | %10,0 | – (kural yok) |
-| Alt parça K.SİZ | 88 | 21 | 88 | 6500 × 17 · 5000 × 1 · 4700 × 3 | %1,3 | – |
-| Alt parça K.Lİ | 6 | 6 | 6 | 4700 × 6 | %30,6 | – |
-| Tambur | 94 | 28 | 94 | 6500 × 25 · 5000 × 1 · 4700 × 2 | %1,6 | – |
+| Lamel EKO | 88 | 17 | 73 | 684 | %1,7 | 15 poz, ≈ 78 çubuk |
+| Lamel STANDART | 6 | 0 | 0 | – | – | 6 poz, ≈ 253 çubuk |
+| Dikme | 94 | 34 | 94 | 68 | %10,7 | – (kural yok) |
+| Alt parça K.SİZ | 88 | 20 | 88 | 20 | %1,6 | – |
+| Alt parça K.Lİ | 6 | 6 | 6 | 6 | %49,8 | – |
+| Tambur | 94 | 28 | 94 | 28 | %4,4 | – |
 
-Tek proje 21542 (156 poz, adetler 35–40) — `ÖRNEK ÇIKTI - 21542 (araç).xlsx`: lamelde 40 grup,
-156 pozun tamamı gruplarda, 6500 × 1.181 · 5000 × 40 · 4700 × 297, grup firesi %2,3, 33 grup tam
-eşit adetli. Dikme 6500 × 104; alt parça 38 çubuk (%2,0); tambur 48 çubuk (%7,7).
+Aynı dört proje, üç boy işaretliyken: lamel EKO 18 grup / 74 poz (6500 × 592 · 5000 × 131, fire %1,4);
+dikme 6500 × 50 · 5000 × 2 · 4700 × 22 (%10,0); alt parça K.SİZ %1,3; K.Lİ 4700 × 6 (%30,6);
+tambur 6500 × 25 · 5000 × 1 · 4700 × 2 (%1,6).
 
-Kutulu örnek 24576 (4 poz) — `ÖRNEK ÇIKTI - 24576 kutulu (araç).xlsx`: dört kutu profilinin her
-birinde iki parça tek 4700'lük çubuktan; lamelin dört pozu (adet 20 / 24 / 31 / 32) KALANLAR'da.
+Tek proje 21542 (156 poz, adetler 35–40), **üç boy işaretli** — `ÖRNEK ÇIKTI - 21542 (araç).xlsx`:
+lamelde 40 grup, 156 pozun tamamı gruplarda, 6500 × 1.181 · 5000 × 40 · 4700 × 297, grup firesi
+%2,3, 33 grup tam eşit adetli. Dikme 6500 × 104; alt parça 38 çubuk (%2,0); tambur 48 çubuk (%7,7).
+Yalnızca 6500 ile: lamel 37 grup, 154 poz, 1.407 çubuk, 2 poz KALANLAR.
+
+Kutulu örnek 24576 (4 poz), varsayılan ayar — `ÖRNEK ÇIKTI - 24576 kutulu (araç).xlsx`: dört kutu
+profilinin her birinde iki parça tek çubuktan; lamelin dört pozu (adet 20 / 24 / 31 / 32) KALANLAR'da.
 
 Karşılaştırmalar (lamel):
 
@@ -166,20 +184,20 @@ Atlas dış araçları ayrı depodan günde bir kez eşitliyor ve kısıtlı çe
 - Kısıtlı çerçevede denendi: `localStorage` kapalı, araç çalışıyor, 8 worker `blob:` adresinden
   açılıyor. Worker'ları yasaklayan politikada (`worker-src 'none'`) ana iş parçacığına düşüp
   doğru sonuç veriyor.
-- **Atlas'ta ayarlar hatırlanmaz** (`localStorage` yok): her açılışta varsayılanlar gelir. Bu yüzden
-  varsayılanların doğru olması önemli (çubuk boyları, demetler, en az grup toplamı).
+- **Atlas'ta ayarlar hatırlanmaz** (`localStorage` yok): her açılışta varsayılanlar gelir (yalnızca
+  6500 işaretli, adetler boş). 5000 / 4700 ve stok adetleri her açılışta yeniden işaretlenir.
 - Yeni sürüm: Atlas bu depodan eşitliyorsa `main` dalındaki son commit bir sonraki eşitlemede alınır (günde bir kez); hangi kaynaktan aldığı Atlas tarafında teyit edilmeli.
 
 ## Açık konular
 
-1. **Hangi parça hangi boylarda geliyor?** Üç boy (6500 / 5000 / 4700) şu an bütün parçalarda
-   varsayılan. Lamel, dikme, alt parça, tambur ya da kutu profillerinden yalnızca tek boyda gelen
-   varsa varsayılanı tür bazında düzeltilmeli (Atlas'ta ayar hatırlanmadığı için özellikle).
+1. **"Adet"in anlamı.** Boyun yanındaki adet "stokta kaç çubuk var" olarak yorumlandı: araç o
+   boydan en çok o kadar çubuk kullanır. Kastedilen başka bir şeyse (ör. yalnızca sonuçta boy başına
+   çıkan çubuk sayısı) alan kaldırılabilir; sonuçtaki sayım zaten yazıyor.
 2. **Kısa boylarda en az grup toplamı.** 5000 için 4750, 4700 için 4450 varsayıldı (aynı 250 mm pay).
 3. **Kutu, kutu kapağı, köşebent, pano U demeti.** Tek tek kesim (demet 1) varsayıldı; kural yok.
 4. **Her kutu profili ayrı sayfa.** Altı projede 7–10 kutu sayfası çıkabilir, çoğu birkaç satır.
    İstenirse aynı türün profilleri tek sayfada alt alta toplanabilir.
-5. **KALANLAR çubuk sayısı tahmindir.** Usta farklı pozları aynı çubukta birleştirirse daha az tutar.
+5. **KALANLAR çubuk sayısı tahmindir** (parçalar tek tek yerleştirilirse); artıklar değerlendirilirse daha az tutar.
 6. **STANDART lamel ve K.Lİ alt parça (~3250 mm).** İki poz birlikte hiçbir boya sığmıyor
    (3239 + 3254 + 8 = 6501); lamelde hepsi KALANLAR'da.
 7. Kuralın kapalı olduğu parçalarda çubuğa iki kez sığan uzun parça, "her satır tek poz" yüzünden
@@ -218,7 +236,7 @@ klasöründe ve `src/test/yerel/elle-ornek.xlsx` olarak durur), `src/test/test-o
 
 ```
 py src/build.py                                              derle
-node src/test/run-node.js "iters=60000&xlsx=1"               bütün testler, tarayıcısız (≈ 10 sn)
+node src/test/run-node.js "iters=60000&xlsx=1"               bütün testler, tarayıcısız (≈ 25 sn)
 bash src/test/run.sh "iters=60000&xlsx=1"                    aynı testler headless Chrome'da (birkaç dakika)
 bash src/test/run.sh "only=real4&iters=150000"               dört gerçek proje: ayrı ayrı ve birlikte
 bash src/test/run.sh "only=real4all&iters=300000&nocust=1"   dört projenin tam Excel'i
@@ -237,6 +255,7 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
 | 11.11 | Grup içi sıra ölçüye göre büyükten küçüğe; "N kenarda" notu, demetteki çubuk sayısı grup başlığında |
 | 11.11 | Çubuk boyları 6500 / 5000 / 4700: grup sığdığı en kısa boydan, boy başına çubuk sayısı (sayfa başı, ÖZET, ekran) |
 | 11.11 | Kutu, kutu kapağı, köşebent, pano U tanınıyor ve açık geliyor; strafor tanınıyor, kapalı. Kutulu örnek 24576 |
+| 11.11 | Çubuk boyları parça başına seçenek + stok adedi (6500 işaretli gelir); stok sınırı motoru (`assignStock`); KALANLAR çubuk tahmini parça bazında yerleştirmeyle |
 | 10.11 | En az grup toplamı kuralı (lamel 6250) ve buna göre arama; KALANLAR yalnızca liste + çubuk tahmini |
 | 10.11 | Baskı: başlığın kesilmesi düzeltildi (görünüm kaydı), sayfa başına iki sütun, elle sayfa sonları, sabit ölçek, altbilgide sayfa no; notlar kısaldı |
 | 10.11 | Kısıtlı çerçeve desteği: worker açılamazsa ana iş parçacığı; SheetJS 0.20.3; Node test koşucusu; GitHub deposu |
@@ -251,8 +270,8 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
 - Kaynakta `\uXXXX` kaçışı yerine `String.fromCharCode` kullanıldı (bazı araçlar kaçışı gerçek
   karaktere çeviriyor). Çok satırlı yamalar dosyaya yazılıp çalıştırılmalı.
 - Kayıtlı arayüz ayarları `PARAMS_VERSION` ile sürümlenir (şu an 4); anlamı değişen alan olunca
-  artırılmalı. Parça ayarlarında (`panjur.mats`) `lengths` ya da `minSum` alanı olmayan eski
-  kayıtlara varsayılan uygulanır.
+  artırılmalı. Parça ayarları (`panjur.mats`) `CFG_VERSION` ile sürümlenir (şu an 2); eski sürüm
+  kayıtlarında boy seçimi varsayılana döner, `minSum` alanı yoksa varsayılan uygulanır.
 - Satır sırası çubuk kullanımını değiştirmez (bekleyen çubuklar hep aynı çubuklardır); artık
   demetleri adet düzeylerinden hesaplanır, derleyici ve doğrulayıcı aynı kuralı kullanır.
 - Motor eski "aynı ölçüyü birleştir" yolunu hâlâ destekliyor (`mergeSameLength`), arayüzde kapalı;

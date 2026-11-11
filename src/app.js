@@ -214,12 +214,30 @@
   // En az grup toplamı: lamelde çubuk boyunun 250 mm altı (6500 → 6250); diğer parçalarda kural yok (0).
   const MIN_SUM_SLACK = 250;
   function defaultMinSum(m, L) { return m.type === 'lamel' ? Math.max(0, L - MIN_SUM_SLACK) : 0; }
-  // lengths: bu parçanın stok boyları (büyükten küçüğe); L en uzunu. En az grup toplamı en uzun boy içindir.
+  // Parça ayarı. opts: genel listedeki her çubuk boyu için { len, on, qty } — on: bu parça o boydan
+  // kesilebilir mi (seçenek); qty: o boydan stokta kaç çubuk var (boş = sınır yok). Varsayılan: yalnızca
+  // en uzun boy (6500) işaretli. Türetilenler: lengths (işaretli boylar, büyükten küçüğe), L (en uzunu),
+  // stock (adedi girilmiş boylar). En az grup toplamı işaretli en uzun boy içindir.
+  const CFG_VERSION = 2;
+  function syncCfg(cfg) {
+    if (!cfg.opts.some(o => o.on)) cfg.opts[0].on = true;          // en az bir boy seçili olmalı
+    cfg.lengths = cfg.opts.filter(o => o.on).map(o => o.len).sort((a, b) => b - a);
+    cfg.L = cfg.lengths[0];
+    cfg.stock = {};
+    for (const o of cfg.opts) if (o.on && o.qty != null) cfg.stock[o.len] = o.qty;
+    return cfg;
+  }
   // Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) varsayılan olarak kapalı gelir.
   function defaultCfg(m, defLs) {
     const cap = defLs[0] - (Number($('pSafety').value) || 0), kerf = Number($('pKerf').value) || 0;
     const fits = m.items.some(it => it.len + kerf <= cap);
-    return { on: !!m.defaultOn && fits, lengths: defLs.slice(), L: defLs[0], bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defLs[0]) };
+    return syncCfg({ v: CFG_VERSION, on: !!m.defaultOn && fits, opts: defLs.map((len, k) => ({ len, on: k === 0, qty: null })), bundle: m.defaultBundle || 1, minSum: defaultMinSum(m, defLs[0]) });
+  }
+  // Tablodaki "Çubuk boyları" hücresi: her boy için işaret kutusu, işaretliyse yanında adet alanı
+  function lensCell(m, i) {
+    return m.cfg.opts.map(o => `<label class="lenopt${o.on ? ' on' : ''}"><input type="checkbox" data-mi="${i}" data-mk="lenOn" data-len="${o.len}"${o.on ? ' checked' : ''}>${fmt(o.len)}`
+      + (o.on ? `<input type="number" class="qty" min="0" step="1" placeholder="adet" data-mi="${i}" data-mk="lenQty" data-len="${o.len}" value="${o.qty == null ? '' : o.qty}" title="Bu boydan stokta kaç çubuk var? Boş bırakılırsa sınır yoktur.">` : '')
+      + '</label>').join('');
   }
   // Kısa boylarda geçerli sınırlar: "5.000 → 4.750 · 4.700 → 4.450"
   function minSumHint(cfg) {
@@ -243,7 +261,7 @@
         <td>${m.pozCount}</td>
         <td>${fmt(m.pieces)}</td>
         <td>${(m.totalMm / 1000).toFixed(1)} m</td>
-        <td><input type="text" class="lens" data-mi="${i}" data-mk="lengths" value="${m.cfg.lengths.join(', ')}" title="Bu parçanın stok boyları (mm), virgülle. Her grup sığdığı en kısa boydan kesilir."></td>
+        <td class="lenscell">${lensCell(m, i)}</td>
         <td><input type="number" step="1" min="1" data-mi="${i}" data-mk="bundle" value="${m.cfg.bundle}"></td>
         <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="En uzun çubuk için: ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok">${minSumHint(m.cfg) ? '<br><span class="hint">' + minSumHint(m.cfg) + '</span>' : ''}</td>
       </tr>`).join('');
@@ -252,21 +270,28 @@
         <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyları</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
         <div class="matfoot">İşaretli parçalar optimize edilir; demet = tek seferde kesilen en fazla adet.
-          <b>Çubuk boyları:</b> parçanın stokta bulunan boyları, virgülle (ör. 6500, 5000, 4700). Her grup sığdığı en kısa boydan kesilir;
-          sonuçta hangi boydan kaç çubuk kesileceği yazar. Bir parça yalnızca tek boyda geliyorsa buraya yalnızca o boyu yazın.
+          <b>Çubuk boyları:</b> parçanın kesilebileceği boyları işaretleyin; ${fmt(defaultLengths()[0])} işaretli gelir. İşaretli boyun yanındaki
+          <b>adet</b>, o boydan stokta kaç çubuk olduğudur (boş = sınır yok). Her grup işaretli boylardan sığdığı en kısasından kesilir;
+          adedi biten boyun yerine bir uzunu kullanılır, hiçbirinde yer kalmazsa pozlar KALANLAR'a yazılır. Sonuçta hangi boydan kaç çubuk kesileceği yazar.
           <b>En az grup toplamı:</b> bir grubun ölçüleri toplamı bu değerin altında kalıyorsa o grup yazılmaz, pozları KALANLAR'a bırakılır
           (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boylarını girin.' : ''}</div>`;
       box.querySelectorAll('input[data-mi]').forEach(inp => inp.addEventListener('change', e => {
         const m = app.mats[Number(e.target.dataset.mi)], k = e.target.dataset.mk;
         if (k === 'on') m.cfg.on = e.target.checked;
-        else if (k === 'lengths') {
-          const lens = parseLengths(e.target.value);
-          if (lens.length) {
-            // en az grup toplamı en uzun boyu izliyorsa (boy − 250) yeni boya göre güncellenir
-            const follows = m.cfg.minSum > 0 && m.cfg.minSum === Math.max(0, m.cfg.L - MIN_SUM_SLACK);
-            m.cfg.lengths = lens; m.cfg.L = lens[0];
-            m.cfg.minSum = follows ? Math.max(0, m.cfg.L - MIN_SUM_SLACK) : Math.max(0, Math.min(m.cfg.minSum, m.cfg.L - 1));
+        else if (k === 'lenOn' || k === 'lenQty') {
+          const o = m.cfg.opts.find(x => x.len === Number(e.target.dataset.len));
+          // en az grup toplamı en uzun boyu izliyorsa (boy − 250) yeni en uzun boya göre güncellenir
+          const follows = m.cfg.minSum > 0 && m.cfg.minSum === Math.max(0, m.cfg.L - MIN_SUM_SLACK);
+          if (k === 'lenOn') {
+            o.on = e.target.checked;
+            if (!o.on) o.qty = null;
+            if (!m.cfg.opts.some(x => x.on)) { o.on = true; toast('En az bir çubuk boyu işaretli olmalı.'); }
+          } else {
+            const t = String(e.target.value).trim(), v = Math.floor(Number(t));
+            o.qty = t === '' || !isFinite(v) || v < 0 ? null : v;
           }
+          syncCfg(m.cfg);
+          m.cfg.minSum = follows ? Math.max(0, m.cfg.L - MIN_SUM_SLACK) : Math.max(0, Math.min(m.cfg.minSum, m.cfg.L - 1));
         } else {
           const v = Math.round(Number(e.target.value) || 0);
           if (k === 'minSum') m.cfg.minSum = Math.max(0, Math.min(v, m.cfg.L - 1));
@@ -275,7 +300,7 @@
         }
         matCfgSave(m.key, m.cfg);
         if (k === 'on') e.target.closest('tr').classList.toggle('off', !m.cfg.on);
-        if (k === 'lengths' || k === 'minSum') { renderMaterials(); return; }
+        if (k === 'lenOn' || k === 'lenQty' || k === 'minSum') { renderMaterials(); return; }
         updateRunHint();
       }));
     }
@@ -309,12 +334,16 @@
       const def = defaultCfg(m, defLs);
       const sv = saved[m.key];
       if (sv) {
-        // Eski kayıtlarda tek boy (L) vardı: 6500 ise yeni boy listesi uygulanır, elle değiştirilmişse o boy korunur
-        let lens = Array.isArray(sv.lengths) ? parseLengths(sv.lengths.join(',')) : [];
-        if (!lens.length) lens = Number(sv.L) && Number(sv.L) !== 6500 ? [Math.round(Number(sv.L))] : def.lengths.slice();
-        const L = lens[0];
+        // Boy seçenekleri genel listeye göre kurulur; kayıtlı seçim ve adetler (aynı sürümse) üstüne işlenir.
+        // Eski sürüm kayıtlarında (tek boy ya da boy listesi) seçim varsayılana döner: yalnızca en uzun boy.
+        const opts = def.opts.map(o => {
+          const old = sv.v === CFG_VERSION && Array.isArray(sv.opts) ? sv.opts.find(x => x && Number(x.len) === o.len) : null;
+          return old ? { len: o.len, on: !!old.on, qty: old.on && old.qty != null && isFinite(Number(old.qty)) ? Math.max(0, Math.floor(Number(old.qty))) : null } : o;
+        });
+        const cfg = syncCfg({ v: CFG_VERSION, on: !!sv.on, opts, bundle: Number(sv.bundle) || def.bundle, minSum: 0 });
         // minSum alanı olmayan eski kayıtlarda varsayılan (lamel: boy − 250) uygulanır
-        m.cfg = { on: !!sv.on, lengths: lens, L, bundle: Number(sv.bundle) || def.bundle, minSum: sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Math.min(Number(sv.minSum), L - 1)) : defaultMinSum(m, L) };
+        cfg.minSum = sv.minSum != null && isFinite(Number(sv.minSum)) ? Math.max(0, Math.min(Number(sv.minSum), cfg.L - 1)) : defaultMinSum(m, cfg.L);
+        m.cfg = cfg;
       } else m.cfg = def;
     }
     // sekme / sayfa adı: mergeProjects'in verdiği ayırt edici kısa ad (LAMEL EKO, LAMEL STANDART …)
@@ -420,7 +449,7 @@
     const lines = mats.map(m => {
       const div = document.createElement('div'); div.className = 'pline';
       const sc = timeScale(m);
-      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · çubuk ${m.cfg.lengths.join(' / ')} · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
+      div.innerHTML = `<div>${esc(m.sheetName)} <span class="hint">${m.items.length} poz · çubuk ${m.cfg.lengths.map(x => x + (m.cfg.stock[x] != null ? ' (' + m.cfg.stock[x] + ' adet)' : '')).join(' / ')} · demet ${m.cfg.bundle}${m.cfg.minSum ? ' · grup toplamı ≥ ' + fmt(m.cfg.minSum) : ''}${m.orders.length > 1 ? ' · ' + m.orders.length + ' proje' : ''}${sc > 1.05 ? ' · süre ×' + sc.toFixed(1) : ''}</span></div><div class="pbar"><div></div></div><div class="hint">bekliyor</div>`;
       prog.appendChild(div); return div;
     });
     const t0 = performance.now();
@@ -428,7 +457,7 @@
       for (let i = 0; i < mats.length; i++) {
         if (app.abort) break;
         const m = mats[i];
-        const P = { L: m.cfg.L, lengths: m.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
+        const P = { L: m.cfg.L, lengths: m.cfg.lengths.slice(), stock: Object.assign({}, m.cfg.stock), kerf: params.kerf, safety: params.safety, maxBundle: m.cfg.bundle || 1, minSum: m.cfg.minSum || 0, wCut: params.wCut, wBar: params.wBar, wChange: params.wChange, wKalan: params.wKalan, wSpread: params.wSpread, maxSpread: params.maxSpread, mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit };
         const bar = lines[i].querySelector('.pbar > div'), txt = lines[i].children[2];
         const scale = timeScale(m);
         const res = await optimizeMaterial(m, P, Math.round(params.timeMs * scale), (frac, best, n) => { bar.style.width = (frac * 100).toFixed(0) + '%'; txt.textContent = `${(frac * 100).toFixed(0)}% · en iyi maliyet ${isFinite(best) ? Math.round(best) : '–'} · ${n} paralel`; });
@@ -473,7 +502,7 @@
         if (app.abort) break;
         const r = runs[i];
         btn.textContent = `Karşılaştırılıyor… ${i + 1}/${runs.length}`;
-        const P = Object.assign({ L: mat.cfg.L, lengths: mat.cfg.lengths.slice(), kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
+        const P = Object.assign({ L: mat.cfg.L, lengths: mat.cfg.lengths.slice(), stock: Object.assign({}, mat.cfg.stock), kerf: params.kerf, safety: params.safety, maxBundle: mat.cfg.bundle || 1, minSum: mat.cfg.minSum || 0,
           mergeSameLength: params.mergeSameLength, multiStep: params.multiStep, allowSplit: params.allowSplit }, weightParams(r.w));
         const res = await optimizeMaterial(mat, P, per, () => {});
         rows.push({ name: r.name, w: r.w, preset: r.preset, st: res.stats });
@@ -558,7 +587,7 @@
     const def = k.listOnly ? '' : (k.deficit || []).map(d => `<tr><td colspan="6" class="err">Eksik: poz ${esc(d.item.poz)} × ${d.count} (${fmt(d.item.len)} mm) artıktan çıkmadı → yeni çubuk grubu</td></tr>`).join('');
     const st = res.stats;
     const cap = k.listOnly
-      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · toplamı sınıra ulaşan gruba giremeyenler${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + ((res.P.lengths || []).length > 1 ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`
+      ? `${k.parts.length} poz · ${fmt(st.kalanPieces)} parça · ${res.P.minSum > 0 ? 'toplamı sınıra ulaşan gruba giremeyenler' : 'stoktaki çubuklara sığmayanlar'}${k.strokes ? ' · artıklardan ' + k.strokes + ' kesim' : ''}${st.kalanNewBars ? ' · ≈ ' + ((res.P.lengths || []).length > 1 ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`
       : `${k.parts.length} poz · artıklardan ${k.strokes} kesim`;
     return `<div class="gbox kalan"><table class="g"><caption>KALANLAR <span class="m">${cap}</span></caption>
       <thead><tr><th>Sipariş</th><th>Müşteri</th><th>POZ</th><th>ADET</th><th>ÖLÇÜ</th><th style="text-align:left">Kaynak</th></tr></thead><tbody>${rows}${def}</tbody></table></div>`;
@@ -586,7 +615,7 @@
     const slack = res.P.L - res.P.minSum;
     const minText = multiLen ? res.P.lengths.map(x => fmt(x) + ' → ' + fmt(x - slack)).join(' · ') : fmt(res.P.minSum);
     const stats = (st.listOnly ? [
-      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz · grup toplamı ≥ ${multiLen ? 'boy − ' + fmt(slack) : fmt(res.P.minSum)}`],
+      ['Grup', st.groupCount, `${st.groupPozCount}/${res.items.length} poz` + (res.P.minSum > 0 ? ` · grup toplamı ≥ ${multiLen ? 'boy − ' + fmt(slack) : fmt(res.P.minSum)}` : '')],
       ['Eşit adetli grup', `${st.equalGroups}/${st.groupCount}`, `en çok fark ${st.spreadMax} · ${lim}`],
       ['Grup çubuğu', fmt(st.groupBars), `${multiLen ? byLenText(st.barsByLen) + ' · ' : ''}fire ${(st.groupWastePct * 100).toFixed(1)} %`],
       ['KALANLAR', st.kalanCount + ' poz', `${fmt(st.kalanPieces)} parça${st.kalanNewBars ? ' · ≈ ' + (multiLen ? byLenText(st.kalanBarsByLen) : st.kalanNewBars + ' çubuk') : ''}`],
@@ -605,9 +634,10 @@
     const groups = res.groups.map(g => renderGroup(g, res)).join('') + (res.kalan.fallbackGroups || []).map(g => renderGroup(g, res)).join('') + renderKalan(res);
     $('resBody').innerHTML = `<div class="stats">${stats}</div>
       <div class="valid ${v.ok ? 'ok' : 'bad'}">${v.ok ? (st.listOnly
-        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; yazılan her grubun toplamı en az ${multiLen ? '(' + minText + ')' : fmt(res.P.minSum) + ' mm'}, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.`
+        ? `✔ Doğrulama: her poz ya tam adediyle bir grupta ya da KALANLAR'da; ${res.P.minSum > 0 ? 'yazılan her grubun toplamı en az ' + (multiLen ? '(' + minText + ')' : fmt(res.P.minSum) + ' mm') + ', ' : ''}hiçbir çubuk boyu${Object.keys(st.stock || {}).length ? ' ve stok adedi' : ''} aşılmadı, demet ve adet farkı sınırları korundu.`
         : '✔ Doğrulama: her pozun adedi tam, hiçbir çubuk boyu aşılmadı, demet ve adet farkı sınırları korundu.') : '✖ Doğrulama hataları: ' + esc(v.errors.slice(0, 5).join(' | '))}</div>
-      ${st.listOnly && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${multiLen ? 'sınıra (' + minText + ')' : fmt(res.P.minSum) + " mm'ye"} ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
+      ${st.stockShort ? `<div class="valid bad">⚠ Stok yetmiyor: KALANLAR'daki pozlar için stokta karşılığı olmayan ≈ ${st.stockShort} çubuk daha gerekir (${fmt(res.P.L)}'lik hesabıyla). Girilen adetler: ${Object.keys(st.stock).map(Number).sort((a, b) => b - a).map(x => fmt(x) + ' × ' + st.stock[x]).join(' · ')}.</div>` : ''}
+      ${st.listOnly && res.P.minSum > 0 && !st.groupCount ? `<div class="valid bad">⚠ Hiçbir grup yazılmadı: bu parçada ölçüleri toplamı ${multiLen ? 'sınıra (' + minText + ')' : fmt(res.P.minSum) + " mm'ye"} ulaşan, adetleri uyumlu grup kurulamıyor. Bütün pozlar KALANLAR'da. Kuralı kaldırmak için parça tablosunda "En az grup toplamı"na 0 yazın.</div>` : ''}
       ${(res.oversize || []).length ? `<div class="valid bad">⚠ ${res.oversize.length} poz çubuk boyundan (${fmt(res.P.L)} mm) uzun olduğu için plana alınmadı: ${res.oversize.slice(0, 8).map(o => 'poz ' + esc(o.poz) + ' (' + o.count + ' × ' + fmt(o.len) + ' mm)').join(', ')}${res.oversize.length > 8 ? ' …' : ''}</div>` : ''}
       <div class="cmp">Maliyet ${Math.round(st.cost)} (başlangıç ${Math.round(res.initialCost)}) · ${fmt(res.iterations)} iterasyon · ${esc(x.mat.desc)} ${esc(x.mat.color)}</div>
       <div class="breakdown">${costBreakdown(res)}</div>
@@ -695,7 +725,7 @@
         try {
           const items = [];
           for (let i = 1; i <= 24; i++) items.push({ order: '1', customer: 'T', poz: i, len: 1200 + (i % 7) * 97, count: 18 + (i % 3) });
-          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, lengths: [6500], L: 6500, bundle: 50, minSum: 0 } };
+          const mat = { key: 'lamel|x|y', type: 'lamel', desc: 'TEST', color: '', sheetName: 'LAMEL', items, orders: [], cfg: { on: true, lengths: [6500], L: 6500, stock: {}, bundle: 50, minSum: 0 } };
           const P = Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 50 });
           const res = await optimizeMaterial(mat, P, 1500, () => {});
           let ls = true;

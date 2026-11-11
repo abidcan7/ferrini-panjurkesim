@@ -18,8 +18,8 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
    aynı proje no için hatırlanır ve çıktının sağ üst köşesine yazılır.
 4. **Parçalar** tablosunda ne kesileceğini seçin. Lamel, dikme, alt parça, tambur ve kutu profilleri
    (kutu, kutu kapağı, köşebent, pano U) otomatik işaretli gelir; fitil, strafor ve tanınmayan
-   profiller kapalı gelir. Her parça için **çubuk boyları**, **demet** (tek seferde kesilen en fazla
-   adet) ve **en az grup toplamı** ayrı ayrı ayarlanır ve hatırlanır.
+   profiller kapalı gelir. Her parça için **çubuk boyları** (seçenek ve adet), **demet** (tek seferde
+   kesilen en fazla adet) ve **en az grup toplamı** ayrı ayrı ayarlanır ve hatırlanır.
 5. **Optimize et** → her parça için ilerleme; ardından sonuç tabloları.
 6. **Excel indir** → `MÜŞTERİ KESİM PLANI.xlsx`.
 
@@ -35,11 +35,14 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
   ile en küçük adet arasındaki fark en çok **4** olabilir (43–39 gibi; ayarlanır). İdeal olan
   hepsinin eşit olmasıdır (43/43/43/43); araç sınırın içinde de farkı sıfıra doğru iter.
 - Sığma şartı: `Σ ölçü + kesim sayısı × testere payı ≤ çubuk boyu − emniyet payı`.
-- **Çubuk boyları (6500, 5000, 4700).** Bir parçanın stokta birden fazla boyu varsa her grup
-  **sığdığı en kısa boydan** kesilir; çubuğun maliyeti boyuyla orantılı sayılır. Sonuçta hangi boydan
-  kaç çubuk kesileceği yazar ("Çubuk: 6500 × 592 · 5000 × 131") ve her grubun başlığında boyu durur
-  ("GRUP 12 · 5000"). Boylar genel ayardan ve parça tablosundan parça başına değiştirilir; bir parça
-  yalnızca tek boyda geliyorsa oraya yalnızca o boy yazılır.
+- **Çubuk boyları: seçenek ve adet.** Parça tablosunda her parçanın satırında 6500, 5000 ve 4700
+  seçenek olarak durur; **6500 işaretli gelir**, diğerlerini o parça için işaretlersiniz. İşaretli
+  boyun yanına **adet** yazılabilir: o boydan stokta kaç çubuk olduğu (boş = sınır yok). Her grup
+  işaretli boylardan **sığdığı en kısasından** kesilir; çubuğun maliyeti boyuyla orantılı sayılır.
+  Adedi biten boyun yerine bir uzunu kullanılır; hiçbir boyda yer kalmazsa pozlar KALANLAR'a yazılır
+  ve "stok yetmiyor" uyarısı çıkar. Sonuçta hangi boydan kaç çubuk kesileceği yazar
+  ("Çubuk: 6500 × 592 · 5000 × 131") ve her grubun başlığında boyu durur ("GRUP 12 · 5000").
+  Seçenek listesi genel ayardaki "Çubuk boyları" alanından değiştirilir.
 - **En az grup toplamı (lamelde 6250).** Bir grubun ölçüleri toplamı (Excel'deki toplam satırı) bu
   değerin altında kalıyorsa o grup gerçek bir optimizasyon değildir: **yazılmaz**, pozları
   KALANLAR'a bırakılır. 6500'lük çubukta varsayılan 6250'dir (çubuk boyu − 250); kısa boylarda aynı
@@ -50,8 +53,8 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
 - **KALANLAR**: hiçbir gruba giremeyen pozların listesi (sipariş · müşteri · poz · adet · ölçü).
   Usta bunları artıklardan ve gerekirse yeni çubuktan keser. Kenarda bekleyen çubuklardan
   kesilebilenler not sütununda ("artık G12×3") ve ARTIK PLANI sayfasında gösterilir. En az grup
-  toplamı kuralı açıkken KALANLAR için ayrıca grup yazılmaz; gereken çubuk yalnızca tahmin edilir
-  (her poz kendi başına, en az malzeme harcayan boydan, bir çubuğa sığdığı kadar kesilirse).
+  toplamı kuralı açıkken ya da bir boya stok adedi girilmişken KALANLAR için ayrıca grup yazılmaz;
+  gereken çubuk yalnızca tahmin edilir (parçalar tek tek, çubuklara sığdığı kadar yerleştirilirse).
 
 ### Tanınan parçalar
 
@@ -151,26 +154,29 @@ konduğu için düzen her bilgisayarda aynıdır.
 
 ## Örnek sonuçlar
 
-Hepsi varsayılan ayarlarla: üç çubuk boyu (6500 / 5000 / 4700), lamelde en az grup toplamı kuralı.
+Lamelde en az grup toplamı kuralı açık (varsayılan).
 
-Dört proje birlikte (24714 + 23876 + 24221 + 24543, 94 poz) —
+Dört proje birlikte (24714 + 23876 + 24221 + 24543, 94 poz), varsayılan ayar: yalnızca 6500 işaretli —
 `ÖRNEK ÇIKTI - 4 proje birlikte (araç).xlsx`:
 
-| Parça | Poz | Grup | Gruplardaki poz | Çubuk (boy × adet) | Grup firesi | KALANLAR |
+| Parça | Poz | Grup | Gruplardaki poz | Çubuk (6500) | Grup firesi | KALANLAR |
 |---|---|---|---|---|---|---|
-| Lamel EKO | 88 | 18 | 74 | 6500 × 592 · 5000 × 131 | %1,4 | 14 poz (≈ 6500 × 64 · 4700 × 22) |
-| Lamel STANDART | 6 | 0 | 0 | – | – | 6 poz (≈ 4700 × 230 · 6500 × 23) |
-| Dikme | 94 | 37 | 94 | 6500 × 50 · 5000 × 2 · 4700 × 22 | %10,0 | – |
-| Alt parça K.SİZ | 88 | 21 | 88 | 6500 × 17 · 5000 × 1 · 4700 × 3 | %1,3 | – |
-| Alt parça K.Lİ | 6 | 6 | 6 | 4700 × 6 | %30,6 | – |
-| Tambur | 94 | 28 | 94 | 6500 × 25 · 5000 × 1 · 4700 × 2 | %1,6 | – |
+| Lamel EKO | 88 | 17 | 73 | 684 | %1,7 | 15 poz (≈ 78 çubuk) |
+| Lamel STANDART | 6 | 0 | 0 | – | – | 6 poz (≈ 253 çubuk) |
+| Dikme | 94 | 34 | 94 | 68 | %10,7 | – |
+| Alt parça K.SİZ | 88 | 20 | 88 | 20 | %1,6 | – |
+| Alt parça K.Lİ | 6 | 6 | 6 | 6 | %49,8 | – |
+| Tambur | 94 | 28 | 94 | 28 | %4,4 | – |
 
-Lamel EKO'da 18 grubun 16'sı tam eşit adetli. STANDART lamelin altı pozu da ~3250 mm: iki poz
-birlikte hiçbir boya sığmadığı için toplamı sınıra ulaşan grup kurulamaz, hepsi KALANLAR'dadır (her biri
-4700'lük çubuktan tek tek kesilirse fire %27; yalnızca 6500 olsaydı %45). Dosyada ayrıca birer
-pozluk kutu ve kutu kapağı sayfaları vardır.
+Lamel EKO'da 17 grubun 13'ü tam eşit adetli, en küçük grup toplamı 6.322. STANDART lamelin altı
+pozu da ~3250 mm: iki poz birlikte çubuğa sığmadığı için toplamı sınıra ulaşan grup kurulamaz,
+hepsi KALANLAR'dadır. Dosyada ayrıca birer pozluk kutu ve kutu kapağı sayfaları vardır.
 
-21542 numaralı proje (156 poz, lamel adetleri 35–40) — `ÖRNEK ÇIKTI - 21542 (araç).xlsx`:
+Aynı dört projede üç boy da işaretlenirse: lamel EKO 74 poz gruplarda (6500 × 592 · 5000 × 131),
+tambur firesi %4,4'ten %1,6'ya, K.Lİ alt parça firesi %49,8'den %30,6'ya iner (4700 × 6).
+
+21542 numaralı proje (156 poz, lamel adetleri 35–40), bütün parçalarda **üç boy işaretli** —
+`ÖRNEK ÇIKTI - 21542 (araç).xlsx`:
 
 | Parça | Poz | Grup | Gruplardaki poz | Çubuk (boy × adet) | Grup firesi | KALANLAR | Eşit adetli grup |
 |---|---|---|---|---|---|---|---|
@@ -180,13 +186,14 @@ pozluk kutu ve kutu kapağı sayfaları vardır.
 | Tambur | 156 | 48 | 156 | 6500 × 45 · 5000 × 2 · 4700 × 1 | %7,7 | – | 48 / 48 |
 
 Çubuk boylarının etkisi (lamel, kural açık): yalnızca 6500 ile 21542'de 156 pozun 154'ü gruba
-giriyordu (37 grup, 1.407 çubuk, 2 poz KALANLAR); üç boyla 156'sı da giriyor. Dört projede 73 → 74 poz.
-Kuralsız çözüp 6250'nin altındaki grupları sonradan atmak 21542'de yalnızca 139–140 poz bırakırdı.
+girer (37 grup, 1.407 çubuk, 2 poz KALANLAR); üç boyla 156'sı da girer. 4700'e "100 adet", 5000'e
+"40 adet" yazılırsa araç bu adetleri aşmaz (4700 × 37 · 5000 × 40 · 6500 × 1.369), yine 156 poz
+gruplardadır. Kuralsız çözüp 6250'nin altındaki grupları sonradan atmak yalnızca 139–140 poz bırakırdı.
 
-Kutulu örnek 24576 (4 poz) — `ÖRNEK ÇIKTI - 24576 kutulu (araç).xlsx`: dört kutu profilinin
-(SK-165 ve SK-205, ön ve arka) her birinde iki parça tek bir 4700'lük çubuktan çıkıyor. Bu projenin
-dört lamel pozu ise (adetler 20 / 24 / 31 / 32) tek başına grup kuramıyor, KALANLAR'da; başka
-projelerle birlikte yüklenince gruplara girer.
+Kutulu örnek 24576 (4 poz), varsayılan ayar — `ÖRNEK ÇIKTI - 24576 kutulu (araç).xlsx`: dört kutu
+profilinin (SK-165 ve SK-205, ön ve arka) her birinde iki parça tek çubuktan çıkıyor (4700 de
+işaretlenirse 4700'lük çubuktan). Bu projenin dört lamel pozu ise (adetler 20 / 24 / 31 / 32) tek
+başına grup kuramıyor, KALANLAR'da; başka projelerle birlikte yüklenince gruplara girer.
 
 ## Başka bir sayfanın içinde çalıştırma
 
@@ -195,8 +202,8 @@ dosyalar tarayıcıda okunur ve hiçbir yere gönderilmez. Bir portalın içinde
 (`<iframe sandbox="allow-scripts allow-modals allow-downloads">`, `allow-same-origin` olmadan,
 `connect-src 'none'` ile) çalışır:
 
-- `localStorage` kapalıysa ayarlar ve müşteri adları hatırlanmaz (her açılışta varsayılanlar gelir),
-  başka bir şey değişmez;
+- `localStorage` kapalıysa ayarlar ve müşteri adları hatırlanmaz (her açılışta varsayılanlar gelir:
+  yalnızca 6500 işaretli, adet boş), başka bir şey değişmez;
 - paralel arama Web Worker'larla yapılır (betik `blob:` adresinden); içerik güvenlik politikası
   bunu engelliyorsa araç aynı aramayı ana iş parçacığında yapar (daha yavaş, sonuç aynı nitelikte);
 - Excel indirme için çerçevede `allow-downloads` gerekir.
@@ -208,15 +215,15 @@ dosyalar tarayıcıda okunur ve hiçbir yere gönderilmez. Bir portalın içinde
 ```
 PanjurKesim.html   derlenmiş araç (src/'den üretilir, elle düzenlenmez)
 src/
-  optimizer.js   çekirdek motor (grup derleyici, stok boyu seçimi, en az grup toplamı araması,
-                 artık planlayıcı, tavlama benzetimi, doğrulayıcı)
+  optimizer.js   çekirdek motor (grup derleyici, stok boyu seçimi ve stok adedi, en az grup toplamı
+                 araması, artık planlayıcı, tavlama benzetimi, doğrulayıcı)
   parser.js      dosya ayrıştırıcı (CSV + Excel, sütun çıkarımı, parça türleri) ve proje birleştirme
   excel-out.js   Excel yazıcı (ExcelJS): iki sütunlu sayfalama, baskı ayarları
   app.js         arayüz, paralel Web Worker koşuları
   index.html     arayüz şablonu (geliştirme için; worker ve dosya okuma için http gerekir)
   build.py       tek dosyalık PanjurKesim.html üretir  →  py src/build.py
-  test/test.js       testler (203 kontrol)
-  test/run-node.js   tarayıcısız koşucu  →  node src/test/run-node.js "iters=60000&xlsx=1"   (≈ 10 sn)
+  test/test.js       testler (214 kontrol)
+  test/run-node.js   tarayıcısız koşucu  →  node src/test/run-node.js "iters=60000&xlsx=1"   (≈ 25 sn)
   test/run.sh        headless Chrome koşucusu  →  bash src/test/run.sh "iters=60000&xlsx=1"
                      "only=real4" dört gerçek projeyi ayrı ve birlikte çözer ·
                      "only=real4all&nocust=1" dört projenin tam Excel'ini yazar ·

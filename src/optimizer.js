@@ -9,6 +9,9 @@
  *     boyda "artık demetleri" oluşturur. Satır sırası çubuk kullanımını değiştirmez.
  *   - Stok boyları (lengths): birden fazla çubuk boyu varsa (ör. 6500, 5000, 4700) her grup
  *     sığdığı EN KISA boydan kesilir; çubuk maliyeti boyuyla orantılıdır. P.L en uzun boydur.
+ *   - Stok adedi (stock, isteğe bağlı): bir boydan en çok kaç çubuk kullanılabileceği. Sınır varsa
+ *     gruplar boylara dağıtılır (assignStock): kısa boyun stoğu biterse grup bir uzun boya geçer;
+ *     hiçbir boyda yer bulamayan grubun pozları KALANLAR'a kalır ve KALANLAR yalnızca listedir.
  *   - Adım = bir satır = TEK POZ (ölçü, adet). Varsayılan: her poz tam adediyle tek satır,
  *     tek kesim. İstenirse aynı poz aynı grupta birden çok satıra bölünebilir (multiStep);
  *     aynı ölçüdeki pozları tek kesimde birleştirme (mergeSameLength) iptal edildi, kapalı.
@@ -37,6 +40,7 @@
   const DEFAULTS = Object.freeze({
     L: 6500,          // çubuk boyu (mm); lengths verilirse en uzun stok boyu
     lengths: null,    // stok boyları (mm), ör. [6500, 5000, 4700]; verilmezse yalnızca L
+    stock: null,      // boy → en çok kaç çubuk (ör. { 5000: 40 }); verilmeyen boy sınırsız
     kerf: 4,          // testere payı (mm / kesim)
     safety: 5,        // emniyet payı (mm / çubuk)
     maxBundle: 50,    // tek seferde kesilebilecek en fazla parça
@@ -146,6 +150,9 @@
   // En az grup toplamı kuralına takılıyor mu? Sınır, grubun kesildiği boya göredir:
   // en uzun boyda minSum, kısa boylarda aynı pay (boy − (P.L − minSum)).
   function isLowComp(P, c) { return P.minSum > 0 && c.sumLen < c.barLen - (P.L - P.minSum); }
+  // KALANLAR yalnızca liste mi? (en az grup toplamı kuralı ya da sınırlı stok varsa: onlar için
+  // yeni çubuk grubu yazılmaz)
+  function listOnly(P) { return P.minSum > 0 || !!P.limited; }
 
   function compileWithN(keys, n, P, cap) {
     const steps = [];
@@ -325,6 +332,42 @@
     return { groups, bars, strokes, changes, cost, barUnits, matMm };
   }
 
+  // ---------------------------------------------------------------- sınırlı stok
+  /**
+   * Grupları stok boylarına dağıtır (yalnızca bir boyda adet sınırı varsa çağrılır).
+   * Her grup, sığdığı en kısa boydan başlayarak stoğu yeten ve (kural açıksa) en az grup toplamını
+   * sağlayan ilk boyu alır; hiçbiri yoksa 0 (yerleşemedi). Kısa boya ihtiyaç duyan gruplar önce
+   * gelir; aynı boyu isteyenlerde çubuk başına kazancı yüksek olan önceliklidir.
+   * Dönüş: { assign: Map(grup → boy | 0), remaining: Map(boy → kalan stok) }
+   */
+  function assignStock(state, cand) {
+    const P = state.P, ms = P.minSum > 0, slack = P.L - P.minSum;
+    const Ls = P.lengths.slice().sort((a, b) => a - b);
+    const remaining = new Map();
+    for (const L of Ls) remaining.set(L, P.stock && P.stock[L] != null ? P.stock[L] : Infinity);
+    const dens = new Map();
+    for (const gi of cand) {
+      const g = state.groups[gi];
+      let v = -g.comp.cost;
+      for (const p of g.parts) v += kalanCost(p, P);
+      dens.set(gi, v / g.comp.bars);
+    }
+    const order = cand.slice().sort((x, y) => state.groups[x].comp.barLen - state.groups[y].comp.barLen || dens.get(y) - dens.get(x) || x - y);
+    const assign = new Map();
+    for (const gi of order) {
+      const c = state.groups[gi].comp;
+      let got = 0;
+      for (const L of Ls) {
+        if (L < c.barLen || remaining.get(L) < c.bars) continue;
+        if (ms && c.sumLen < L - slack) continue;
+        got = L; break;
+      }
+      assign.set(gi, got);
+      if (got) remaining.set(got, remaining.get(got) - c.bars);
+    }
+    return { assign, remaining };
+  }
+
   // ---------------------------------------------------------------- durum ve değerlendirme
 
   const KALAN = -1;
@@ -364,34 +407,55 @@
       if (this.P.minSum > 0) for (const g of this.groups) if (this.isLow(g)) for (const p of g.parts) out.push(p);
       return out;
     }
+    // Grup serbest mi (pozları KALANLAR sayılıyor mu)? Sınırın altında kalmışsa ya da son
+    // değerlendirmede stoktan boy alamamışsa.
+    isFree(gi) {
+      const g = this.groups[gi];
+      if (!g.parts.length) return false;
+      if (this.isLow(g)) return true;
+      return !!(this.eval && this.eval.assign && this.eval.assign.get(gi) === 0);
+    }
     evaluate() {
-      const P = this.P, ms = P.minSum > 0;
+      const P = this.P, ms = P.minSum > 0, lo = listOnly(P);
       let cost = 0, bars = 0, strokes = 0, changes = 0, barUnits = 0, matMm = 0;
       const pool = [];
       const kal = this.kalanParts();
+      const cand = [];
       for (let gi = 0; gi < this.groups.length; gi++) {
         const g = this.groups[gi];
         if (g.parts.length === 0) continue;
         const c = g.comp;
         if (!c.feasible) return { cost: Infinity };
         if (ms && isLowComp(P, c)) { for (const p of g.parts) kal.push(p); continue; }
-        cost += c.cost; bars += c.bars; strokes += c.strokes; changes += c.changes;
-        barUnits += c.barUnits; matMm += c.bars * c.barLen;
-        for (const r of c.remnants) if (r.count > 0 && r.len > 0) pool.push({ count: r.count, len: r.len, group: gi, step: r.afterStep });
+        cand.push(gi);
       }
-      const kp = planKalan(kal, pool, P, ms);
+      // Sınırlı stok varsa gruplar boylara dağıtılır; boy alamayan grubun pozları KALANLAR sayılır.
+      const st = P.limited ? assignStock(this, cand) : null;
+      const placed = [];        // [grup, ek boy, grup, ek boy, …]
+      for (const gi of cand) {
+        const g = this.groups[gi], c = g.comp;
+        let extra = 0;          // stok yüzünden sığdığından uzun boydan kesiliyorsa aradaki fark
+        if (st) {
+          const L = st.assign.get(gi);
+          if (!L) { for (const p of g.parts) kal.push(p); continue; }
+          extra = L - c.barLen;
+        }
+        placed.push(gi, extra);
+        cost += c.cost + (extra ? P.wBar * c.bars * extra / P.L : 0);
+        bars += c.bars; strokes += c.strokes; changes += c.changes;
+        barUnits += c.bars * (c.barLen + extra) / P.L; matMm += c.bars * (c.barLen + extra);
+        for (const r of c.remnants) if (r.count > 0 && r.len + extra > 0) pool.push({ count: r.count, len: r.len + extra, group: gi, step: r.afterStep });
+      }
+      const kp = planKalan(kal, pool, P, lo);
       cost += kp.cost;
       if (P.wFill) {
         // KALANLAR'da kullanılmayan son kalanlar için doluluk ödülü (yalnızca gerçek hurda)
         const usedFinal = new Set();
         for (const e of kp.plan) usedFinal.add(e.bundle.group + ':' + e.bundle.step);
-        for (let gi = 0; gi < this.groups.length; gi++) {
-          const g = this.groups[gi];
-          if (!g.parts.length) continue;
-          const c = g.comp;
-          if (ms && isLowComp(P, c)) continue;
+        for (let i = 0; i < placed.length; i += 2) {
+          const gi = placed[i], c = this.groups[gi].comp;
           if (usedFinal.has(gi + ':' + c.steps.length)) continue;
-          const f = c.leftover / P.L;
+          const f = (c.leftover + placed[i + 1]) / P.L;
           cost -= P.wFill * c.remnants[c.remnants.length - 1].count * f * f;
         }
       }
@@ -402,7 +466,8 @@
       const fbChanges = kp.fallback ? kp.fallback.changes : 0;
       cost += P.wWaste * (matMm + fbMm - this.totalPieceMm);
       return { cost, bars: bars + fbBars, barUnits: barUnits + fbUnits, matMm: matMm + fbMm, strokes: strokes + kp.strokes + fbStrokes, changes: changes + kp.changes + fbChanges, kp, kal,
-        groupBars: bars, groupBarUnits: barUnits, groupMatMm: matMm, groupStrokes: strokes, groupChanges: changes };
+        groupBars: bars, groupBarUnits: barUnits, groupMatMm: matMm, groupStrokes: strokes, groupChanges: changes,
+        assign: st ? st.assign : null, remaining: st ? st.remaining : null };
     }
     snapshot() {
       const s = { loc: new Map(this.loc), nPref: this.groups.map(g => g.nPref), cost: this.cost };
@@ -493,14 +558,24 @@
    * maxSpread içinde kalan en kazançlı alt küme (sınırlı derinlik-öncelikli arama).
    * Kazanç = pozların KALANLAR maliyeti − grubun maliyeti; yalnızca kazançlı gruplar döner.
    * rng verilirse aday sırası hafifçe karıştırılır (her çağrıda başka çözüm).
+   * avail (Map boy → kalan stok) verilirse grup, stoğu yeten bir boya oturmak zorundadır.
    * Dönüş: { parts, gain } ya da null.
    */
-  function bestFill(P, seeds, cands, limit, rng) {
+  function bestFill(P, seeds, cands, limit, rng, avail) {
     const cap = P.L - P.safety, kerf = P.kerf;
     const slack = P.L - P.minSum;                     // her boyda izin verilen en çok açık (boy − toplam)
     const Ls = (P.lengths && P.lengths.length ? P.lengths : [P.L]).slice().sort((a, b) => a - b);
     // çubuk başı boy (testere payları dahil) per olan grubun sığdığı en kısa stok boyu
     const need = per => { for (let i = 0; i < Ls.length; i++) if (per <= Ls[i] - P.safety) return Ls[i]; return P.L; };
+    // stok sınırlıyken: sığan, stoğu hi çubuğa yeten ve toplamı sınırı tutan en kısa boy (yoksa 0)
+    const place = (per, hi, sum) => {
+      for (let i = 0; i < Ls.length; i++) {
+        const L = Ls[i];
+        if (per > L - P.safety || avail.get(L) < hi) continue;
+        if (sum >= L - slack) return L;
+      }
+      return 0;
+    };
     const S = P.maxSpread == null ? 9999 : P.maxSpread;
     const exact = P.mergeSameLength || P.multiStep;   // satır sayısı poz sayısına eşit değilse tam derleme gerekir
     let sum0 = 0, per0 = 0, lo0 = Infinity, hi0 = -Infinity, kc0 = 0;
@@ -545,7 +620,10 @@
       // Bu pozlar en az barLen boyunda çubuk ister; poz eklendikçe gereken boy ancak büyür.
       // Geçerli olmak için toplam en az (boy − pay) olmalı.
       const barLen = need(per), minSum = barLen - slack;
-      if (sum >= minSum) score(lo, hi, kc, barLen);
+      if (sum >= minSum) {
+        const L = avail ? place(per, hi, sum) : barLen;
+        if (L) score(lo, hi, kc, L);
+      }
       const room = cap - per;
       for (let j = i; j < n; j++) {
         if (nodes > limit) return;
@@ -570,10 +648,20 @@
    */
   function fillFree(state, limit, randomize) {
     const P = state.P, rng = state.rng;
-    for (const g of state.groups) {
-      if (!state.isLow(g)) continue;
+    const dissolve = g => {
       for (const p of g.parts) state.loc.set(p.id, KALAN);
       g.parts = []; g.comp = EMPTY; g.nPref = null;
+    };
+    for (const g of state.groups) if (state.isLow(g)) dissolve(g);
+    // Sınırlı stok: boy alamayan gruplar da dağıtılır; yeni gruplar kalan stoğa göre kurulur
+    let avail = null;
+    const asc = (P.lengths || [P.L]).slice().sort((a, b) => a - b), slack = P.L - P.minSum;
+    if (P.limited) {
+      const ev = state.evaluate();
+      if (ev.assign) {
+        for (const [gi, L] of ev.assign) if (!L) dissolve(state.groups[gi]);
+        avail = new Map(ev.remaining);
+      }
     }
     const free = state.kalanParts();
     if (randomize) {
@@ -585,10 +673,19 @@
       if (used.has(seed.id)) continue;
       const cands = [];
       for (const q of free) if (q !== seed && !used.has(q.id)) cands.push(q);
-      const r = bestFill(P, [seed], cands, limit, randomize ? rng : null);
+      const r = bestFill(P, [seed], cands, limit, randomize ? rng : null, avail);
       if (!r) continue;
       const comp = compileGroup(r.parts, P, null);
       if (!comp.feasible || isLowComp(P, comp)) continue;
+      if (avail) {
+        let L = 0;
+        for (const x of asc) {
+          if (x < comp.barLen || avail.get(x) < comp.bars || comp.sumLen < x - slack) continue;
+          L = x; break;
+        }
+        if (!L) continue;
+        avail.set(L, avail.get(L) - comp.bars);
+      }
       const gi = state.newGroupIndex(), g = state.groups[gi];
       g.parts = r.parts.slice(); g.comp = comp; g.nPref = null;
       for (const q of r.parts) { state.loc.set(q.id, gi); used.add(q.id); }
@@ -605,7 +702,7 @@
     for (let i = 0; i < state.groups.length; i++) {
       const g = state.groups[i];
       if (!g.parts.length) continue;
-      if (state.isLow(g)) freeCount += g.parts.length; else valid.push(i);
+      if (state.isFree(i)) freeCount += g.parts.length; else valid.push(i);
     }
     for (const p of state.parts) if (state.loc.get(p.id) === KALAN) freeCount++;
     let k = (rng() * 4) | 0;
@@ -956,17 +1053,55 @@
 
   // ---------------------------------------------------------------- sonuç üretimi
 
+  /**
+   * KALANLAR için gereken yeni çubuk tahmini. Parçalar tek tek, uzundan kısaya, ilk sığdığı çubuğa
+   * yerleştirilir (en uzun boyda); sonra her çubuk, içeriğinin sığdığı ve stoğu olan en kısa boya
+   * indirilir. Usta böyle kesmek zorunda değildir; sayı yol göstermek içindir.
+   * rem: Map(boy → kalan stok) ya da null (sınırsız). Stokta karşılığı olmayan çubuklar "short".
+   */
+  function estimateKalanBars(deficit, P, rem) {
+    const Ls = (P.lengths && P.lengths.length ? P.lengths : [P.L]).slice().sort((a, b) => a - b);
+    const cap = P.L - P.safety;
+    const pieces = [];
+    for (const d of deficit) {
+      const u = d.item.len + P.kerf;
+      for (let k = 0; k < d.count; k++) pieces.push(u);
+    }
+    pieces.sort((a, b) => b - a);
+    const bins = [];
+    for (const u of pieces) {
+      let placed = false;
+      for (let i = 0; i < bins.length; i++) if (bins[i] + u <= cap) { bins[i] += u; placed = true; break; }
+      if (!placed) bins.push(u);
+    }
+    bins.sort((a, b) => b - a);
+    const byLen = {};
+    let bars = 0, mm = 0, short = 0;
+    for (const used of bins) {
+      let L = 0;
+      for (const x of Ls) {
+        if (used > x - P.safety || (rem && rem.get(x) < 1)) continue;
+        L = x; break;
+      }
+      if (!L) { L = P.L; short++; } else if (rem) rem.set(L, rem.get(L) - 1);
+      byLen[L] = (byLen[L] || 0) + 1; bars++; mm += L;
+    }
+    return { byLen, bars, mm, short };
+  }
+
   function buildResult(state, material) {
-    const P = state.P, ms = P.minSum > 0;
+    const P = state.P, ms = listOnly(P);      // ms: KALANLAR yalnızca liste (kural ya da sınırlı stok)
     const ev = state.evaluate();
     const groups = [];
     const order = [];
-    // minSum açıkken toplamı sınırın altında kalan gruplar yazılmaz (pozları KALANLAR'dadır: ev.kal)
-    for (let gi = 0; gi < state.groups.length; gi++) if (state.groups[gi].parts.length && !state.isLow(state.groups[gi])) order.push(gi);
+    // Grubun kesileceği boy: sığdığı en kısa boy; stok sınırlıysa atanan boy (0 = boy alamadı)
+    const lenOf = gi => ev.assign ? ev.assign.get(gi) : state.groups[gi].comp.barLen;
+    // Toplamı sınırın altında kalan ya da stoktan boy alamayan gruplar yazılmaz (pozları KALANLAR'da: ev.kal)
+    for (let gi = 0; gi < state.groups.length; gi++) if (state.groups[gi].parts.length && !state.isLow(state.groups[gi]) && lenOf(gi)) order.push(gi);
     // sıralama: çubuk boyu uzundan kısaya, demet büyükten küçüğe, sonra en uzun ölçü uzundan kısaya
     order.sort((a, b) => {
       const ca = state.groups[a].comp, cb = state.groups[b].comp;
-      return cb.barLen - ca.barLen || cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
+      return lenOf(b) - lenOf(a) || cb.bars - ca.bars || cb.steps[0].len - ca.steps[0].len || a - b;
     });
     const gIndexOf = new Map();
     order.forEach((gi, i) => gIndexOf.set(gi, i + 1));
@@ -978,32 +1113,23 @@
     }));
     for (const gi of order) {
       const c = state.groups[gi].comp;
+      const extra = lenOf(gi) - c.barLen;      // stok yüzünden daha uzun boydan kesiliyorsa
       groups.push({
-        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, barLen: c.barLen, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
-        perBar: c.perBar, sumLen: c.sumLen, leftover: c.leftover, steps: mapSteps(c),
-        remnants: c.remnants.filter(r => r.count > 0 && r.len > 0),
+        no: gIndexOf.get(gi), stateIndex: gi, bars: c.bars, barLen: c.barLen + extra, strokes: c.strokes, changes: c.changes, spread: c.spread || 0,
+        perBar: c.perBar, sumLen: c.sumLen, leftover: c.leftover + extra, steps: mapSteps(c),
+        remnants: c.remnants.map(r => Object.assign({}, r, { len: r.len + extra })).filter(r => r.count > 0 && r.len > 0),
       });
     }
     const kp = ev.kp;
     const kalanParts = ev.kal.slice().sort((a, b) => b.item.len - a.item.len || b.count - a.count || a.id - b.id);
-    // minSum açıkken artıktan çıkmayan KALANLAR için grup yazılmaz. Gereken yeni çubuk şöyle
-    // tahmin edilir: her poz kendi başına, bir çubuğa sığdığı kadar kesilir (2998 mm → 6500'lük
-    // çubuktan 2); birden fazla stok boyu varsa en az malzeme harcayan boy seçilir. Usta farklı
-    // pozları aynı çubukta birleştirirse daha az tutar.
+    // KALANLAR yalnızca listeyken artıktan çıkmayanlar için grup yazılmaz; gereken yeni çubuk
+    // estimateKalanBars ile tahmin edilir (stok sınırlıysa gruplardan artan stoğa göre).
     const estByLen = {};
-    let estBars = 0, estMm = 0;
-    if (ms) {
-      for (const d of kp.deficit) {
-        let bL = P.L, bBars = 0, bMm = Infinity;
-        for (const L of P.lengths || [P.L]) {
-          const per = Math.floor((L - P.safety) / (d.item.len + P.kerf));
-          if (per < 1) continue;
-          const nb = Math.ceil(d.count / per);
-          if (nb * L < bMm) { bMm = nb * L; bBars = nb; bL = L; }
-        }
-        if (!bBars) continue;
-        estBars += bBars; estMm += bMm; estByLen[bL] = (estByLen[bL] || 0) + bBars;
-      }
+    let estBars = 0, estMm = 0, estShort = 0;       // estShort: stokta karşılığı olmayan çubuk
+    if (ms && kp.deficit.length) {
+      const e = estimateKalanBars(kp.deficit, P, ev.remaining ? new Map(ev.remaining) : null);
+      estBars = e.bars; estMm = e.mm; estShort = e.short;
+      for (const k of Object.keys(e.byLen)) estByLen[k] = e.byLen[k];
     }
     const fbGroups = kp.fallback ? kp.fallback.groups.map((g, i) => ({
       no: groups.length + i + 1, bars: g.comp.bars, barLen: g.comp.barLen, strokes: g.comp.strokes, changes: g.comp.changes, spread: g.comp.spread || 0, perBar: g.comp.perBar,
@@ -1025,6 +1151,7 @@
       listOnly: ms,                       // true: KALANLAR yalnızca listedir, yeni çubuk grupları yazılmaz
       newBars: ms ? estBars : (kp.fallback ? kp.fallback.bars : 0),     // artıktan çıkmayanlar için (kural açıkken tahmini) yeni çubuk
       newBarsByLen: ms ? estByLen : fbByLen,                             // aynısı, stok boyuna göre
+      shortBars: estShort,                                               // bunun stokta karşılığı olmayan kısmı (sınırlı stok)
       fallbackGroups: fbGroups,
     };
     let pieces = 0;
@@ -1067,7 +1194,8 @@
       fallbackBars: kp.fallback ? kp.fallback.bars : 0,
       // stok boyları
       lengths: (P.lengths || [P.L]).slice(), barsByLen, kalanBarsByLen: kalan.newBarsByLen,
-      // minSum kuralı: yazılan gruplar ile KALANLAR ayrı ayrı
+      stock: Object.assign({}, P.stock || {}), stockShort: estShort,
+      // KALANLAR yalnızca liste olduğunda (kural ya da sınırlı stok): yazılan gruplar ile KALANLAR ayrı ayrı
       minSum: P.minSum || 0, listOnly: ms,
       groupPieces, groupPieceMm, groupMaterialMm,
       groupWastePct: groupMaterialMm ? (groupMaterialMm - groupPieceMm) / groupMaterialMm : 0,
@@ -1087,7 +1215,8 @@
 
   function validate(result) {
     const P = result.P, errors = [];
-    const ms = P.minSum > 0;
+    const ms = P.minSum > 0, lo = listOnly(P);
+    const stock = P.stock || {};
     const Ls = P.lengths && P.lengths.length ? P.lengths : [P.L];
     const produced = new Map(); // part.id → adet (gruplarda + artık planında)
     const inGroup = new Map();  // part.id → gruplarda kesilen adet
@@ -1119,8 +1248,8 @@
       if (P.maxSpread != null && maxN - minN > P.maxSpread) errors.push(`Grup ${g.no}: adet farkı ${maxN - minN} > ${P.maxSpread}`);
       // Demetin bütün satırlarda kesilen çubukları en çok yeri kullanır: çubuğa sığmalı
       if (used > L - P.safety) errors.push(`Grup ${g.no}: çubuk boyu aşıldı (${used} > ${L - P.safety})`);
-      // Daha kısa bir stok boyuna sığıyorsa oradan kesilmeliydi
-      for (const x of Ls) if (x < L && used <= x - P.safety) errors.push(`Grup ${g.no}: ${x}'lik çubuğa sığarken ${L}'lik yazılmış`);
+      // Daha kısa bir stok boyuna sığıyorsa oradan kesilmeliydi (stoğu sınırlı boy dolmuş olabilir: o sayılmaz)
+      for (const x of Ls) if (x < L && used <= x - P.safety && stock[x] == null) errors.push(`Grup ${g.no}: ${x}'lik çubuğa sığarken ${L}'lik yazılmış`);
       if (ms && !g.fallback && g.sumLen < L - (P.L - P.minSum)) errors.push(`Grup ${g.no}: toplam ${g.sumLen} < en az grup toplamı ${L - (P.L - P.minSum)} (${L}'lik çubuk)`);
       if (g.fallback) continue;
       // artık havuzu: adet düzeylerine göre (derleyiciyle aynı kural)
@@ -1164,6 +1293,8 @@
     for (const g of allGroups) byLen[g.barLen] = (byLen[g.barLen] || 0) + g.bars;
     const sb = (result.stats && result.stats.barsByLen) || {};
     for (const k of Object.keys(byLen).concat(Object.keys(sb))) if ((byLen[k] || 0) !== (sb[k] || 0)) { errors.push(`Boy sayımı tutmuyor: ${k}'lik ${sb[k] || 0} yazıyor, gruplarda ${byLen[k] || 0}`); break; }
+    // Stok adedi aşılmamalı
+    for (const k of Object.keys(stock)) if ((byLen[k] || 0) > stock[k]) errors.push(`Stok aşıldı: ${k}'lik çubuktan ${byLen[k]} kullanılmış, stokta ${stock[k]} var`);
     // Her poz ya tam adediyle bir grupta kesilir ya da KALANLAR'da listelenir (ikisi birden olmaz).
     const listed = new Map();
     for (const k of result.kalan.parts) listed.set(k.part.id, (listed.get(k.part.id) || 0) + k.count);
@@ -1171,8 +1302,8 @@
     for (const d of result.kalan.deficit || []) if (d.part) lacking.set(d.part.id, (lacking.get(d.part.id) || 0) + d.count);
     for (const p of result.parts || []) {
       const got = produced.get(p.id) || 0;
-      if (ms && listed.has(p.id)) {
-        // minSum kuralı: KALANLAR yalnızca listedir. Poz hiçbir grupta olmamalı; artıktan kesilen
+      if (lo && listed.has(p.id)) {
+        // Kural ya da sınırlı stok: KALANLAR yalnızca listedir. Poz hiçbir grupta olmamalı; artıktan kesilen
         // adet + artıktan çıkmayan adet, poz adedine eşit olmalı.
         if (listed.get(p.id) !== p.count) errors.push(`Poz ${p.item.poz} (${p.item.order}): KALANLAR'da ${listed.get(p.id)} yazıyor, adet ${p.count}`);
         if (inGroup.get(p.id)) errors.push(`Poz ${p.item.poz} (${p.item.order}): hem grupta hem KALANLAR'da`);
@@ -1221,13 +1352,22 @@
     Ls = Ls.filter((x, i) => Ls.indexOf(x) === i).sort((a, b) => b - a);
     if (!Ls.length) Ls = [DEFAULTS.L];
     P.lengths = Ls; P.L = Ls[0];
+    // Stok adedi: yalnızca tanımlı boylar için, boş / geçersiz değer sınırsız demektir
+    const stock = {};
+    if (P.stock) for (const L of Ls) {
+      const raw = P.stock[L];
+      if (raw == null || raw === '') continue;
+      const v = Math.floor(Number(raw));
+      if (isFinite(v) && v >= 0) stock[L] = v;
+    }
+    P.stock = stock; P.limited = Object.keys(stock).length > 0;
     const rng = mulberry32(P.seed >>> 0);
     // Çubuğa sığmayan (ölçü + testere payı > boy − emniyet) pozlar plana alınamaz; ayrı listelenir.
     const allItems = items, capLen = P.L - P.safety;
     const oversize = allItems.filter(it => it.len + P.kerf > capLen);
     items = oversize.length ? allItems.filter(it => it.len + P.kerf <= capLen) : allItems;
     const parts = makeParts(items, P);
-    const ms = P.minSum > 0;
+    const ms = P.minSum > 0;     // pencere araması (fill) yalnızca en az grup toplamı kuralında kullanılır
     const state = new State(parts, P, rng);
     state.nextPartId = parts.length + 1;
     constructInitial(state);
@@ -1281,5 +1421,5 @@
     return result;
   }
 
-  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, pickBar, KALAN };
+  return { DEFAULTS, compileGroup, planKalan, optimize, validate, makeParts, mulberry32, State, constructInitial, buildResult, bestFill, fillFree, kalanCost, pickBar, assignStock, estimateKalanBars, KALAN };
 });
