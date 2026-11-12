@@ -1,6 +1,6 @@
 # Panjur kesim optimizasyonu — durum
 
-Son güncelleme: 2026-11-11
+Son güncelleme: 2026-11-12
 
 `PanjurKesim.html`: imalat programının proje dosyalarını (CSV / Excel) okuyup lamel, kutu, dikme, alt
 parça ve tambur borusu için demet kesim planı çıkaran, kurulum ve internet gerektirmeyen tek dosyalık
@@ -11,12 +11,12 @@ Araç 11.11'de Atlas içinde çalışır halde görüldü.
 
 ## Şu an ne durumda
 
-Çalışıyor ve gerçek dosyalarla doğrulandı. 214 kontrolün tamamı hem Node'da hem headless Chrome'da geçiyor.
+Çalışıyor ve gerçek dosyalarla doğrulandı. 228 kontrolün tamamı hem Node'da hem headless Chrome'da geçiyor.
 
 | Konu | Durum |
 |---|---|
 | Dosya okuma | Üç düzen okunuyor (aşağıda); kutulu örnek 24576 dahil |
-| Parça türleri | Lamel, dikme, alt parça, tambur, kutu, kutu kapağı, köşebent, pano U (açık); fitil, strafor (kapalı) |
+| Parçalar | **Ölçüsü olan her kalem işaretli gelir** (12.11); "tanınma" diye bir ayrım yok. Tür yalnızca varsayılanları belirler: lamel demet 50 + 6250 kuralı, dikme demet 2, geri kalan her şey tek tek; fitil ve strafor işaretsiz |
 | Çok proje | Birden fazla dosya tek havuzda optimize ediliyor |
 | Satır düzeni | Her satır tek poz; grup içinde ölçüye göre büyükten küçüğe (11.11) |
 | Öncelik | Grup içi adet farkı en çok 4, ideal eşit |
@@ -44,13 +44,14 @@ Araç 11.11'de Atlas içinde çalışır halde görüldü.
 | 11.11 | **Çubuk boyları 6500 + 5000 + 4700;** çıktıda hangi boydan kaç çubuk kesileceği yazar |
 | 11.11 | **Kutu profilleri tanınır** (SK-165 / 180 / 205, ÖN 45 ve AR 90) ve optimize edilir; tanınmayan parça kalmamalı |
 | 11.11 | **Çubuk boyları her parça için "seçenek ve adet":** boylar işaretlenir, 6500 kendiliğinden işaretli gelir (hangi parçanın hangi boyda geldiği sorusunun cevabı) |
+| 12.11 | **"Tanınma" kalktı.** Ölçüsü olan her kalem işaretli gelir; fitil ve strafor işaretsiz kalır; lamel ve dikme kendi ayarlarını korur; "tanınmadı" etiketi yok. Gerekçe: tanınmayan bir kalem elle işaretlenince zaten kutu profiliyle aynı çözülüyordu; "tanınma" yalnızca kutunun işaretli gelmesini sağlıyordu. Önerdiğim tanım tablosu ve ERP stok listesi gereksiz bulundu, yapılmadı |
 
 Varsayılan ağırlıklar: adet farkı 2 · kesim 10 · çubuk 4 · demet bozma 1 · KALANLAR 12.
 
 Benim yaptığım varsayımlar (teyit bekliyor, aşağıda "Açık konular"):
 "adet" o boydan **stokta kaç çubuk olduğu** olarak yorumlandı (araç bu adedi aşmaz, boş = sınır yok);
-kısa boylarda en az grup toplamı aynı payla (250 mm) hesaplanıyor; kutu, kutu kapağı, köşebent ve
-pano U tek tek kesiliyor (demet 1).
+kısa boylarda en az grup toplamı aynı payla (250 mm) hesaplanıyor; kutu, kutu kapağı, köşebent,
+pano U ve türü bilinmeyen bütün profiller tek tek kesiliyor (demet 1), 6500'lük çubuktan.
 
 ## Çubuk boyları
 
@@ -109,6 +110,11 @@ onun sağı ölçü. Başlıklı Excel'de sütunlar başlıktan okunuyor.
 - Parça türü açıklamadan bulunur (`parser.js › TYPES`). Kutu: açıklamada "kutu" geçen ve "kapak"
   geçmeyenler; kutu kapağı: ikisi de geçenler; köşebent; pano U. Ölçüsü olmayan "yan kapak" gibi
   kalemler zaten atlanır.
+- **Tür çözümü değiştirmez; yalnızca varsayılanları ve kısa adı belirler.** Listede olmayan ölçülü
+  kalem "genel profil"dir (`OTHER`, tür `diger`): işaretli gelir, demet 1, kural yok; kısa adı
+  açıklamasının başından alınır (24 karaktere kadar sözcük: "PVC SİNEKLİK ÖTELEME"). İşaretsiz
+  gelenler yalnızca `on: false` türlerdir (fitil, strafor). Tablo ve sayfa sırası: türü belli
+  olanlar, genel profiller, en sonda işaretsiz gelenler (`typeRank`).
 - Birleştirme anahtarı **stok kodu + renk**; stok kodundaki noktalama yok sayılır (`3224.24` = `322424`).
   Kutunun ön (BAR.F.45…) ve arka (BAR.T.90…) profili, boyutları (165 / 180 / 205) ve renkleri
   (A40, M14) ayrı parçalardır.
@@ -208,15 +214,21 @@ Atlas dış araçları ayrı depodan günde bir kez eşitliyor ve kısıtlı çe
    poz adedi kadar çubukla açılıyor; "bir poz aynı grupta iki satıra bölünebilir" bunu çözer (kapalı).
 8. KALANLAR, başka grubun kenarda bekleyen çubuklarından kesilirken adet sınırını dolaylı aşabilir.
 9. Arama rastlantısal: aynı girdide koşudan koşuya birkaç poz ya da çubuk oynayabilir.
-11. **PVC sineklik öteleme profili** (P-12442/3072) hâlâ "tanınmadı" geliyor; hangi boydan kesildiği
-    ve varsayılan olarak açık gelip gelmeyeceği bilinmiyor.
 10. Baskı: kâğıt çıktısı ve %100 ölçekli bilgisayar denenmedi.
+11. **Türü bilinmeyen profillerin boyu ve demeti.** PVC sineklik öteleme profili (P-12442/3072) ve
+    PVC yan ray 39'luk gibi kalemler artık işaretli geliyor: 6500, demet 1. Hangi boydan
+    kesildikleri bilinmiyor; 6500 değilse Atlas ayarı hatırlamadığı için her açılışta elle
+    işaretlemek gerekir (istenirse o stok kodu için varsayılan boy eklenir). Poz başına 2 adet gelen
+    profilde demet 1 her adedi ayrı satır yazar; çift kesiliyorsa demet elle 2 yapılır.
+12. **Çubuktan kesilmeyen başka ölçülü kalem.** Örnek dosyalarda ölçüsü olup çubuktan kesilmeyen
+    yalnızca fitil ve strafor var. Başka bir metrelik malzeme (tül, lastik…) çıkarsa işaretli
+    gelir; görülünce `parser.js › TYPES` listesine `on: false` olarak eklenir.
 
 ## Dosyalar
 
 ```
 PanjurKesim.html                       araç (src/'den derlenir, elle düzenlenmez)
-README.md                              kullanım, model, tanınan parçalar, Excel sayfaları, baskı düzeni
+README.md                              kullanım, model, parçalar ve varsayılanlar, Excel sayfaları, baskı düzeni
 DURUM.md                               bu dosya
 ÖRNEK ÇIKTI - 4 proje birlikte (araç).xlsx
 ÖRNEK ÇIKTI - 21542 (araç).xlsx
@@ -258,6 +270,8 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
 
 | Tarih | Değişiklik |
 |---|---|
+| 12.11 | Ölçüsü olan her parça işaretli gelir (fitil ve strafor hariç); "tanınmadı" etiketi ve uyarısı kalktı, malzemelerdeki `known` alanı silindi. Genel profilin kısa adı açıklamanın başından; işaretsiz gelenler listenin sonunda |
+| 12.11 | **Düzeltme:** adında kesme işareti olan parça ("YAN RAY 39'LUK") sayfa adına girince Excel dosyası açılmıyordu (yazdırma alanı başvurusu bozuluyordu); kesme işaretiyle başlayan ad indirmeyi hata ile kesiyordu; ilk 31 karakteri aynı iki sayfa adı sonsuz döngüye sokuyordu |
 | 11.11 | Grup içi sıra ölçüye göre büyükten küçüğe; "N kenarda" notu, demetteki çubuk sayısı grup başlığında |
 | 11.11 | Çubuk boyları 6500 / 5000 / 4700: grup sığdığı en kısa boydan, boy başına çubuk sayısı (sayfa başı, ÖZET, ekran) |
 | 11.11 | Kutu, kutu kapağı, köşebent, pano U tanınıyor ve açık geliyor; strafor tanınıyor, kapalı. Kutulu örnek 24576 |
@@ -293,3 +307,9 @@ dosyaları kendiliğinden yükler, `?selftest=1` worker yoluyla küçük bir ör
   bitiremez (saat ilerlemez); gerçek zamanlı deneme için tarayıcı hata ayıklama ucundan sürülmeli.
 - Excel'i otomasyonla açarken yalnızca kendi başlattığın gizli örneği kapat; kullanıcının açık
   Excel'ine dokunma.
+- **Sayfa adı açıklamadan türediği için her zaman `safeSheetName` + `uniqueSheetName`'den geçmeli.**
+  ExcelJS yazdırma alanı ve başlık satırı başvurularını `'ad'!$A$1` biçiminde, addaki kesme işaretini
+  ikilemeden yazar: adında düz `'` olan sayfa dosyayı Excel'de açılmaz yapar (ExcelJS'in kendisi de
+  geri okuyamaz), kesme işaretiyle başlayan ad `addWorksheet`'te hata verir. Düz kesme işareti bu
+  yüzden `’` yapılır. Yeni bir ad kuralı yazınca dosyayı gerçek Excel'de aç; yalnızca dosyanın
+  yazılabilmesi bir şey kanıtlamaz.

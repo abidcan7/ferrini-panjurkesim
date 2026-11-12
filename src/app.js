@@ -234,7 +234,9 @@
     for (const o of cfg.opts) if (o.on && o.qty != null) cfg.stock[o.len] = o.qty;
     return cfg;
   }
-  // Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) varsayılan olarak kapalı gelir.
+  // Ölçüsü olan her parça işaretli gelir (m.defaultOn: türü bilinmeyen profil dahil; yalnızca fitil ve strafor
+  // gibi çubuktan kesilmeyenler işaretsiz). Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış
+  // kutu kapağı) da işaretsiz gelir.
   function defaultCfg(m, defLs) {
     const cap = defLs[0] - (Number($('pSafety').value) || 0), kerf = Number($('pKerf').value) || 0;
     const fits = m.items.some(it => it.len + kerf <= cap);
@@ -263,7 +265,7 @@
     } else {
       const rows = app.mats.map((m, i) => `<tr class="${m.cfg.on ? '' : 'off'}">
         <td><input type="checkbox" data-mi="${i}" data-mk="on"${m.cfg.on ? ' checked' : ''}></td>
-        <td class="name"><b>${esc(m.desc)}</b>${m.known ? '' : ' <span class="badge">tanınmadı</span>'}${m.orders.length > 1 ? ' <span class="badge">' + m.orders.length + ' proje birlikte</span>' : ''}${longCount(m) ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">' + longCount(m) + ' poz çubuktan uzun</span>' : ''}<br><span class="code">${esc(m.stokCodes.join(', '))}</span></td>
+        <td class="name"><b>${esc(m.desc)}</b>${m.orders.length > 1 ? ' <span class="badge">' + m.orders.length + ' proje birlikte</span>' : ''}${longCount(m) ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">' + longCount(m) + ' poz çubuktan uzun</span>' : ''}<br><span class="code">${esc(m.stokCodes.join(', '))}</span></td>
         <td>${m.color ? '<span class="badge">' + esc(m.color) + '</span>' : ''}</td>
         <td>${m.pozCount}</td>
         <td>${fmt(m.pieces)}</td>
@@ -272,16 +274,16 @@
         <td><input type="number" step="1" min="1" data-mi="${i}" data-mk="bundle" value="${m.cfg.bundle}"></td>
         <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="En uzun çubuk için: ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok">${minSumHint(m.cfg) ? '<br><span class="hint">' + minSumHint(m.cfg) + '</span>' : ''}</td>
       </tr>`).join('');
-      const unknown = app.mats.filter(m => !m.known).length;
       box.innerHTML = `<div class="matwrap"><table class="mats">
         <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyları</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
-        <div class="matfoot">İşaretli parçalar optimize edilir; demet = tek seferde kesilen en fazla adet.
+        <div class="matfoot"><b>Ölçüsü olan her parça işaretli gelir;</b> çubuktan kesilmeyenler (fitil, strafor) ve bütün pozları çubuktan uzun olanlar işaretsizdir.
+          Yalnızca işaretli parçalar optimize edilir: kesilmeyecek olanın işaretini kaldırın. Demet = tek seferde kesilen en fazla adet (lamel 50, dikme 2, diğerleri 1).
           <b>Çubuk boyları:</b> parçanın kesilebileceği boyları işaretleyin; ${fmt(defaultLengths()[0])} işaretli gelir. İşaretli boyun yanındaki
           <b>adet</b>, o boydan stokta kaç çubuk olduğudur (boş = sınır yok). Her grup işaretli boylardan sığdığı en kısasından kesilir;
           adedi biten boyun yerine bir uzunu kullanılır, hiçbirinde yer kalmazsa pozlar KALANLAR'a yazılır. Sonuçta hangi boydan kaç çubuk kesileceği yazar.
           <b>En az grup toplamı:</b> bir grubun ölçüleri toplamı bu değerin altında kalıyorsa o grup yazılmaz, pozları KALANLAR'a bırakılır
-          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boylarını girin.' : ''}</div>`;
+          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.</div>`;
       box.querySelectorAll('input[data-mi]').forEach(inp => inp.addEventListener('change', e => {
         const m = app.mats[Number(e.target.dataset.mi)], k = e.target.dataset.mk;
         if (k === 'on') m.cfg.on = e.target.checked;
@@ -741,9 +743,17 @@
           // işaretlenir, adet yazılır, bir parça kapatılır, demet değiştirilir; sonra koşudan önce
           // yapıldığı gibi parçalar yeniden toplanır.
           const rowsT = [];
-          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`);
+          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`,
+            `${i};;TST.PVC.01;PVC SİNEKLİK ÖTELEME PROFİLİ;DENEME;1;${900 + i * 40}`, `${i};;TST.FIT.01;FİTİL 48*800 SİLİKONLU KIL FİTİL;;1;${1500 + i * 30}`);
           await addFiles([new File([rowsT.join('\r\n')], '000000000099999_İmalat.csv')]);
           const qs = (mi, mk, len) => document.querySelector(`#matList input[data-mi="${mi}"][data-mk="${mk}"]` + (len ? `[data-len="${len}"]` : ''));
+          // Varsayılanlar: ölçüsü olan her parça işaretli gelir (türü bilinmeyen profil dahil: tek tek kesim,
+          // en uzun boy, kural yok); fitil işaretsiz; lamel demet 50, dikme demet 2; tabloda "tanınmadı" ayrımı yok.
+          const gen = app.mats.find(m => /SİNEKLİK/.test(m.desc)), fit = app.mats.find(m => /FİTİL/.test(m.desc));
+          const defaultsOk = !!gen && gen.cfg.on === true && gen.cfg.bundle === 1 && gen.cfg.minSum === 0 && gen.cfg.lengths.join() === String(defaultLengths()[0])
+            && qs(app.mats.indexOf(gen), 'on').checked === true && !!fit && fit.cfg.on === false && qs(app.mats.indexOf(fit), 'on').checked === false
+            && app.mats[0].type === 'lamel' && app.mats[0].cfg.on === true && app.mats[0].cfg.bundle === 50 && app.mats[1].type === 'dikme' && app.mats[1].cfg.bundle === 2
+            && !/tanınmadı/.test($('matList').textContent);
           const fire = (el, set) => { set(el); el.dispatchEvent(new Event('change', { bubbles: true })); };
           const second = app.mats[0].cfg.opts[1].len;
           fire(qs(0, 'lenOn', second), el => { el.checked = true; });
@@ -756,7 +766,7 @@
           for (const m of app.mats) delete matCfgAll()[m.key];      // deneme kayıtlarını geri al
           lsSet('panjur.mats', matCfgAll());
           app.files = []; renderFiles();
-          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
+          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, defaultsOk, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
         } catch (e) { pre.textContent = 'HATA ' + (e && e.message); }
         // çerçeve içinde (ör. src/test/sandbox.html) koşuyorsa sonucu dış sayfaya bildir
         if (window.parent !== window) window.parent.postMessage({ panjurSelftest: pre.textContent }, '*');

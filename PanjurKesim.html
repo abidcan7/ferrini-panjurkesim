@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panjur Kesim Optimizasyonu</title>
-<!-- build 2026-11-11 17:05 -->
+<!-- build 2026-11-12 17:45 -->
 <style>
   :root {
     --bg: #f3f4f6; --card: #ffffff; --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb;
@@ -1764,8 +1764,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (XLSX) {
   'use strict';
 
-  // Tanınan parça türleri. bundle: varsayılan demet (tek seferde kesilen adet),
-  // on: varsayılan olarak optimize edilsin mi.
+  // Parça türleri. Tür çözümü değiştirmez; yalnızca VARSAYILANLARI ve kısa adı belirler:
+  // bundle: varsayılan demet (tek seferde kesilen adet), on: parça tabloda işaretli gelsin mi.
+  // Listede olmayan, ölçüsü olan her kalem "genel profil"dir (OTHER): işaretli gelir, tek tek kesilir;
+  // yeni bir profil çıktığında buraya bir şey eklemek gerekmez. Özel bilgi yalnızca üç durumda gerekir:
+  // lamel (demet 50; en az grup toplamı kuralı app.js'te), dikme (demet 2) ve çubuktan kesilmeyen
+  // metrelik malzemeler (fitil, strafor: işaretsiz gelir).
   const TYPES = [
     { type: 'lamel', label: 'LAMEL', bundle: 50, on: true, match: s => /lamel/.test(s) && !/kapa|tapa/.test(s) },
     { type: 'dikme', label: 'DİKME', bundle: 2, on: true, match: s => /dikme/.test(s) },
@@ -1780,7 +1784,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     { type: 'fitil', label: 'FİTİL', bundle: 1, on: false, match: s => /fitil/.test(s) },
     { type: 'strafor', label: 'STRAFOR', bundle: 1, on: false, match: s => /strafor/.test(s) },
   ];
-  const OTHER = { type: 'diger', label: 'DİĞER', bundle: 1, on: false };
+  const OTHER = { type: 'diger', label: 'DİĞER', bundle: 1, on: true };
+
+  // Tablo ve sayfa sırası: işaretli gelen türler listedeki sırayla, sonra genel profiller, en sonda işaretsiz gelenler.
+  function typeRank(type) {
+    const i = TYPES.findIndex(t => t.type === type);
+    return i < 0 ? 50 : TYPES[i].on ? i : 60 + i;
+  }
 
   // Aksan temizliği (kaynakta kaçış dizisi kullanmamak için karakter kodlarından kurulur)
   const RE_COMBINING = new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fromCharCode(0x36f) + ']', 'g');
@@ -2019,7 +2029,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       const key = `${t.type}|${keyPart(stok) || 'ad:' + norm(desc)}|${keyPart(color)}`;
       let mat = materials.get(key);
       if (!mat) {
-        mat = { key, type: t.type, typeLabel: t.label, defaultBundle: t.bundle, defaultOn: t.on, known: t !== OTHER, desc: desc || t.label, color, stokCodes: [], items: [], section: rec.section || '' };
+        mat = { key, type: t.type, typeLabel: t.label, defaultBundle: t.bundle, defaultOn: t.on, desc: desc || t.label, color, stokCodes: [], items: [], section: rec.section || '' };
         materials.set(key, mat);
       }
       if (stok && !mat.stokCodes.includes(stok)) mat.stokCodes.push(stok);
@@ -2036,10 +2046,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       m.pozCount = new Set(m.items.map(i => String(i.poz))).size;
     }
     const pozCount = new Set(records.map(r => String(r.poz).trim())).size;
-    list.sort((a, b) => {
-      const ia = TYPES.findIndex(t => t.type === a.type), ib = TYPES.findIndex(t => t.type === b.type);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr');
-    });
+    list.sort((a, b) => typeRank(a.type) - typeRank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
     assignLabels(list);
     return {
       orderNo: ctx.orderNo, sheetName: ctx.sheetName, fileName: ctx.fileName, layout: ctx.layout,
@@ -2144,7 +2151,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       for (const m of f.parsed.materials) {
         let e = map.get(m.key);
         if (!e) {
-          e = { key: m.key, type: m.type, typeLabel: m.typeLabel, desc: m.desc, color: m.color, known: m.known,
+          e = { key: m.key, type: m.type, typeLabel: m.typeLabel, desc: m.desc, color: m.color,
                 defaultBundle: m.defaultBundle, defaultOn: m.defaultOn, stokCodes: [], items: [], orders: [], pieces: 0, totalMm: 0, maxLen: 0 };
           map.set(m.key, e);
         }
@@ -2157,22 +2164,34 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         e.orders.push({ orderNo: f.orderNo, customer: f.customer, date: f.date, note: f.note, pozCount: m.items.length });
       }
     }
-    const rank = t => { const i = TYPES.findIndex(x => x.type === t); return i < 0 ? 99 : i; };
-    const arr = [...map.values()].sort((a, b) => rank(a.type) - rank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
+    const arr = [...map.values()].sort((a, b) => typeRank(a.type) - typeRank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
     for (const m of arr) m.pozCount = new Set(m.items.map(i => i.order + '/' + i.poz)).size;
     assignLabels(arr);
     return arr;
   }
 
+  /** Genel profilin kısa adı: açıklamanın başından, 24 karakteri aşmayacak kadar sözcük (en az iki sözcük). */
+  function genericBase(desc) {
+    const words = String(desc).split(/\s+/).filter(Boolean);
+    let s = '';
+    for (let i = 0; i < words.length; i++) {
+      const t = s ? s + ' ' + words[i] : words[i];
+      if (i >= 2 && t.length > 24) break;
+      s = t;
+    }
+    return s.toLocaleUpperCase('tr');
+  }
+
   /**
    * Her malzemeye kısa ve ayırt edici bir ad verir (sekme / Excel sayfa adı):
-   * tür etiketi (LAMEL, DİKME…); aynı türden birden fazla malzeme varsa açıklamadaki ayırt edici
-   * sözcük (EKO / STANDART) ve renkler farklıysa renk eklenir; yine aynıysa stok kodu eklenir.
+   * tür etiketi (LAMEL, DİKME…), genel profilde açıklamanın başı; aynı addan birden fazla malzeme varsa
+   * açıklamadaki ayırt edici sözcük (EKO / STANDART) ve renkler farklıysa renk eklenir; yine aynıysa
+   * stok kodu eklenir.
    */
   function assignLabels(mats) {
     const groups = new Map();
     for (const m of mats) {
-      const base = m.known ? m.typeLabel : m.desc.split(/\s+/).slice(0, 2).join(' ').toLocaleUpperCase('tr');
+      const base = m.type === OTHER.type ? genericBase(m.desc) : m.typeLabel;
       if (!groups.has(base)) groups.set(base, []);
       groups.get(base).push(m);
     }
@@ -2258,8 +2277,25 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return seen.join(' + ');
   }
 
+  // Excel sayfa adı: \ / ? * [ ] : olamaz, en çok 31 karakter, kesme işaretiyle başlayıp bitemez.
+  // Düz kesme işareti eğik olanıyla değiştirilir: ExcelJS yazdırma alanı ve başlık satırı başvurularını
+  // 'ad'!$A$1 biçiminde, addaki kesme işaretini ikilemeden yazar; adında düz kesme işareti olan sayfa
+  // (ör. "YAN RAY 39'LUK") dosyayı Excel'de açılmaz hale getirir.
+  const CURLY_APOSTROPHE = String.fromCharCode(0x2019);
   function safeSheetName(s) {
-    return s.replace(/[\[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'Sayfa';
+    return String(s == null ? '' : s).replace(/[\[\]:*?/\\]/g, ' ').replace(/'/g, CURLY_APOSTROPHE).replace(/\s+/g, ' ').trim().slice(0, 31).trim() || 'Sayfa';
+  }
+  // Kullanılmış bir adı ikinci kez vermez (Excel büyük/küçük harf ayırmaz): sonuna 2, 3… ekler; ad 31 karaktere
+  // dayanmışsa sondan kısaltır (eskiden ek kırpılıp aynı ad yeniden üretiliyor, döngü bitmiyordu).
+  function uniqueSheetName(base, used) {
+    const key = s => s.toLocaleUpperCase('tr');
+    let name = base;
+    for (let i = 2; used.has(key(name)); i++) {
+      const suf = ' ' + i;
+      name = base.slice(0, 31 - suf.length).trim() + suf;
+    }
+    used.add(key(name));
+    return name;
   }
 
   const numOr = v => (v !== '' && v != null && isFinite(Number(v)) ? Number(v) : v);
@@ -2738,9 +2774,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     wb.views = [{ x: 0, y: 0, width: 28000, height: 16000, firstSheet: 0, activeTab: 0, visibility: 'visible' }];
     const used = new Set(['ÖZET', 'POZ LİSTESİ', 'ARTIK PLANI']);
     for (const x of results) {
-      let name = safeSheetName(x.meta.sheetName || x.meta.desc);
-      if (used.has(name)) { let i = 2; while (used.has(`${name} ${i}`.slice(0, 31))) i++; name = `${name} ${i}`.slice(0, 31); }
-      used.add(name);
+      const name = uniqueSheetName(safeSheetName(x.meta.sheetName || x.meta.desc), used);
       x.meta = Object.assign({}, x.meta, { sheetName: name });
       const lay = materialSheet(wb, x.result, x.meta, x.opts || {});
       if (info) info[name] = { pages: lay.pages, rowsPerPage: lay.rowsPerPage, lastRow: lay.lastRow, scale: lay.scale, widths: lay.widths };
@@ -2751,7 +2785,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return wb.xlsx.writeBuffer();
   }
 
-  return { buildWorkbook, groupBlock, kalanBlock, stepRow, paginate, rowsPerPage, printScale, ROW_H };
+  return { buildWorkbook, groupBlock, kalanBlock, stepRow, paginate, rowsPerPage, printScale, safeSheetName, uniqueSheetName, ROW_H };
 });
 
 </script>
@@ -2992,7 +3026,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     for (const o of cfg.opts) if (o.on && o.qty != null) cfg.stock[o.len] = o.qty;
     return cfg;
   }
-  // Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) varsayılan olarak kapalı gelir.
+  // Ölçüsü olan her parça işaretli gelir (m.defaultOn: türü bilinmeyen profil dahil; yalnızca fitil ve strafor
+  // gibi çubuktan kesilmeyenler işaretsiz). Bütün pozları çubuktan uzun olan parça (ör. toplam boy yazılmış
+  // kutu kapağı) da işaretsiz gelir.
   function defaultCfg(m, defLs) {
     const cap = defLs[0] - (Number($('pSafety').value) || 0), kerf = Number($('pKerf').value) || 0;
     const fits = m.items.some(it => it.len + kerf <= cap);
@@ -3021,7 +3057,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } else {
       const rows = app.mats.map((m, i) => `<tr class="${m.cfg.on ? '' : 'off'}">
         <td><input type="checkbox" data-mi="${i}" data-mk="on"${m.cfg.on ? ' checked' : ''}></td>
-        <td class="name"><b>${esc(m.desc)}</b>${m.known ? '' : ' <span class="badge">tanınmadı</span>'}${m.orders.length > 1 ? ' <span class="badge">' + m.orders.length + ' proje birlikte</span>' : ''}${longCount(m) ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">' + longCount(m) + ' poz çubuktan uzun</span>' : ''}<br><span class="code">${esc(m.stokCodes.join(', '))}</span></td>
+        <td class="name"><b>${esc(m.desc)}</b>${m.orders.length > 1 ? ' <span class="badge">' + m.orders.length + ' proje birlikte</span>' : ''}${longCount(m) ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">' + longCount(m) + ' poz çubuktan uzun</span>' : ''}<br><span class="code">${esc(m.stokCodes.join(', '))}</span></td>
         <td>${m.color ? '<span class="badge">' + esc(m.color) + '</span>' : ''}</td>
         <td>${m.pozCount}</td>
         <td>${fmt(m.pieces)}</td>
@@ -3030,16 +3066,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         <td><input type="number" step="1" min="1" data-mi="${i}" data-mk="bundle" value="${m.cfg.bundle}"></td>
         <td><input type="number" step="10" min="0" data-mi="${i}" data-mk="minSum" value="${m.cfg.minSum || 0}" title="En uzun çubuk için: ölçüleri toplamı bu değerin altında kalan grup yazılmaz, pozları KALANLAR'a bırakılır. 0 = kural yok">${minSumHint(m.cfg) ? '<br><span class="hint">' + minSumHint(m.cfg) + '</span>' : ''}</td>
       </tr>`).join('');
-      const unknown = app.mats.filter(m => !m.known).length;
       box.innerHTML = `<div class="matwrap"><table class="mats">
         <thead><tr><th></th><th>Parça</th><th>Renk</th><th>Poz</th><th>Parça</th><th>Toplam</th><th>Çubuk boyları</th><th>Demet</th><th>En az grup toplamı</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
-        <div class="matfoot">İşaretli parçalar optimize edilir; demet = tek seferde kesilen en fazla adet.
+        <div class="matfoot"><b>Ölçüsü olan her parça işaretli gelir;</b> çubuktan kesilmeyenler (fitil, strafor) ve bütün pozları çubuktan uzun olanlar işaretsizdir.
+          Yalnızca işaretli parçalar optimize edilir: kesilmeyecek olanın işaretini kaldırın. Demet = tek seferde kesilen en fazla adet (lamel 50, dikme 2, diğerleri 1).
           <b>Çubuk boyları:</b> parçanın kesilebileceği boyları işaretleyin; ${fmt(defaultLengths()[0])} işaretli gelir. İşaretli boyun yanındaki
           <b>adet</b>, o boydan stokta kaç çubuk olduğudur (boş = sınır yok). Her grup işaretli boylardan sığdığı en kısasından kesilir;
           adedi biten boyun yerine bir uzunu kullanılır, hiçbirinde yer kalmazsa pozlar KALANLAR'a yazılır. Sonuçta hangi boydan kaç çubuk kesileceği yazar.
           <b>En az grup toplamı:</b> bir grubun ölçüleri toplamı bu değerin altında kalıyorsa o grup yazılmaz, pozları KALANLAR'a bırakılır
-          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.${unknown ? ' ' + unknown + ' parça tanınmadı — kesilecekse işaretleyip çubuk boylarını girin.' : ''}</div>`;
+          (lamelde ${fmt(6500)}'lük çubuk için ${fmt(6500 - MIN_SUM_SLACK)}; kısa boylarda aynı pay: 5.000 → 4.750, 4.700 → 4.450). 0 yazarsan kural kalkar.</div>`;
       box.querySelectorAll('input[data-mi]').forEach(inp => inp.addEventListener('change', e => {
         const m = app.mats[Number(e.target.dataset.mi)], k = e.target.dataset.mk;
         if (k === 'on') m.cfg.on = e.target.checked;
@@ -3499,9 +3535,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           // işaretlenir, adet yazılır, bir parça kapatılır, demet değiştirilir; sonra koşudan önce
           // yapıldığı gibi parçalar yeniden toplanır.
           const rowsT = [];
-          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`);
+          for (let i = 1; i <= 6; i++) rowsT.push(`${i};;TST.LAM.01;AS 55 EKO ALÜMINYUM LAMEL;DENEME;40;${1500 + i * 30}`, `${i};;TST.DIK.01;DİKMELİ U 62 LIK;DENEME;2;${1200 + i * 10}`,
+            `${i};;TST.PVC.01;PVC SİNEKLİK ÖTELEME PROFİLİ;DENEME;1;${900 + i * 40}`, `${i};;TST.FIT.01;FİTİL 48*800 SİLİKONLU KIL FİTİL;;1;${1500 + i * 30}`);
           await addFiles([new File([rowsT.join('\r\n')], '000000000099999_İmalat.csv')]);
           const qs = (mi, mk, len) => document.querySelector(`#matList input[data-mi="${mi}"][data-mk="${mk}"]` + (len ? `[data-len="${len}"]` : ''));
+          // Varsayılanlar: ölçüsü olan her parça işaretli gelir (türü bilinmeyen profil dahil: tek tek kesim,
+          // en uzun boy, kural yok); fitil işaretsiz; lamel demet 50, dikme demet 2; tabloda "tanınmadı" ayrımı yok.
+          const gen = app.mats.find(m => /SİNEKLİK/.test(m.desc)), fit = app.mats.find(m => /FİTİL/.test(m.desc));
+          const defaultsOk = !!gen && gen.cfg.on === true && gen.cfg.bundle === 1 && gen.cfg.minSum === 0 && gen.cfg.lengths.join() === String(defaultLengths()[0])
+            && qs(app.mats.indexOf(gen), 'on').checked === true && !!fit && fit.cfg.on === false && qs(app.mats.indexOf(fit), 'on').checked === false
+            && app.mats[0].type === 'lamel' && app.mats[0].cfg.on === true && app.mats[0].cfg.bundle === 50 && app.mats[1].type === 'dikme' && app.mats[1].cfg.bundle === 2
+            && !/tanınmadı/.test($('matList').textContent);
           const fire = (el, set) => { set(el); el.dispatchEvent(new Event('change', { bubbles: true })); };
           const second = app.mats[0].cfg.opts[1].len;
           fire(qs(0, 'lenOn', second), el => { el.checked = true; });
@@ -3514,7 +3558,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           for (const m of app.mats) delete matCfgAll()[m.key];      // deneme kayıtlarını geri al
           lsSet('panjur.mats', matCfgAll());
           app.files = []; renderFiles();
-          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
+          pre.textContent = JSON.stringify({ ok: res.validation.ok, settingsKept, defaultsOk, bars: res.stats.bars, strokes: res.stats.strokes, iters: res.iterations, workers: workerCount(), src: !!app.workerSrc, noWorker: !!app.noWorker, origin: location.origin, localStorage: ls });
         } catch (e) { pre.textContent = 'HATA ' + (e && e.message); }
         // çerçeve içinde (ör. src/test/sandbox.html) koşuyorsa sonucu dış sayfaya bildir
         if (window.parent !== window) window.parent.postMessage({ panjurSelftest: pre.textContent }, '*');

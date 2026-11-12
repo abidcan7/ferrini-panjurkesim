@@ -22,8 +22,12 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (XLSX) {
   'use strict';
 
-  // Tanınan parça türleri. bundle: varsayılan demet (tek seferde kesilen adet),
-  // on: varsayılan olarak optimize edilsin mi.
+  // Parça türleri. Tür çözümü değiştirmez; yalnızca VARSAYILANLARI ve kısa adı belirler:
+  // bundle: varsayılan demet (tek seferde kesilen adet), on: parça tabloda işaretli gelsin mi.
+  // Listede olmayan, ölçüsü olan her kalem "genel profil"dir (OTHER): işaretli gelir, tek tek kesilir;
+  // yeni bir profil çıktığında buraya bir şey eklemek gerekmez. Özel bilgi yalnızca üç durumda gerekir:
+  // lamel (demet 50; en az grup toplamı kuralı app.js'te), dikme (demet 2) ve çubuktan kesilmeyen
+  // metrelik malzemeler (fitil, strafor: işaretsiz gelir).
   const TYPES = [
     { type: 'lamel', label: 'LAMEL', bundle: 50, on: true, match: s => /lamel/.test(s) && !/kapa|tapa/.test(s) },
     { type: 'dikme', label: 'DİKME', bundle: 2, on: true, match: s => /dikme/.test(s) },
@@ -38,7 +42,13 @@
     { type: 'fitil', label: 'FİTİL', bundle: 1, on: false, match: s => /fitil/.test(s) },
     { type: 'strafor', label: 'STRAFOR', bundle: 1, on: false, match: s => /strafor/.test(s) },
   ];
-  const OTHER = { type: 'diger', label: 'DİĞER', bundle: 1, on: false };
+  const OTHER = { type: 'diger', label: 'DİĞER', bundle: 1, on: true };
+
+  // Tablo ve sayfa sırası: işaretli gelen türler listedeki sırayla, sonra genel profiller, en sonda işaretsiz gelenler.
+  function typeRank(type) {
+    const i = TYPES.findIndex(t => t.type === type);
+    return i < 0 ? 50 : TYPES[i].on ? i : 60 + i;
+  }
 
   // Aksan temizliği (kaynakta kaçış dizisi kullanmamak için karakter kodlarından kurulur)
   const RE_COMBINING = new RegExp('[' + String.fromCharCode(0x300) + '-' + String.fromCharCode(0x36f) + ']', 'g');
@@ -277,7 +287,7 @@
       const key = `${t.type}|${keyPart(stok) || 'ad:' + norm(desc)}|${keyPart(color)}`;
       let mat = materials.get(key);
       if (!mat) {
-        mat = { key, type: t.type, typeLabel: t.label, defaultBundle: t.bundle, defaultOn: t.on, known: t !== OTHER, desc: desc || t.label, color, stokCodes: [], items: [], section: rec.section || '' };
+        mat = { key, type: t.type, typeLabel: t.label, defaultBundle: t.bundle, defaultOn: t.on, desc: desc || t.label, color, stokCodes: [], items: [], section: rec.section || '' };
         materials.set(key, mat);
       }
       if (stok && !mat.stokCodes.includes(stok)) mat.stokCodes.push(stok);
@@ -294,10 +304,7 @@
       m.pozCount = new Set(m.items.map(i => String(i.poz))).size;
     }
     const pozCount = new Set(records.map(r => String(r.poz).trim())).size;
-    list.sort((a, b) => {
-      const ia = TYPES.findIndex(t => t.type === a.type), ib = TYPES.findIndex(t => t.type === b.type);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr');
-    });
+    list.sort((a, b) => typeRank(a.type) - typeRank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
     assignLabels(list);
     return {
       orderNo: ctx.orderNo, sheetName: ctx.sheetName, fileName: ctx.fileName, layout: ctx.layout,
@@ -402,7 +409,7 @@
       for (const m of f.parsed.materials) {
         let e = map.get(m.key);
         if (!e) {
-          e = { key: m.key, type: m.type, typeLabel: m.typeLabel, desc: m.desc, color: m.color, known: m.known,
+          e = { key: m.key, type: m.type, typeLabel: m.typeLabel, desc: m.desc, color: m.color,
                 defaultBundle: m.defaultBundle, defaultOn: m.defaultOn, stokCodes: [], items: [], orders: [], pieces: 0, totalMm: 0, maxLen: 0 };
           map.set(m.key, e);
         }
@@ -415,22 +422,34 @@
         e.orders.push({ orderNo: f.orderNo, customer: f.customer, date: f.date, note: f.note, pozCount: m.items.length });
       }
     }
-    const rank = t => { const i = TYPES.findIndex(x => x.type === t); return i < 0 ? 99 : i; };
-    const arr = [...map.values()].sort((a, b) => rank(a.type) - rank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
+    const arr = [...map.values()].sort((a, b) => typeRank(a.type) - typeRank(b.type) || a.desc.localeCompare(b.desc, 'tr') || a.color.localeCompare(b.color, 'tr'));
     for (const m of arr) m.pozCount = new Set(m.items.map(i => i.order + '/' + i.poz)).size;
     assignLabels(arr);
     return arr;
   }
 
+  /** Genel profilin kısa adı: açıklamanın başından, 24 karakteri aşmayacak kadar sözcük (en az iki sözcük). */
+  function genericBase(desc) {
+    const words = String(desc).split(/\s+/).filter(Boolean);
+    let s = '';
+    for (let i = 0; i < words.length; i++) {
+      const t = s ? s + ' ' + words[i] : words[i];
+      if (i >= 2 && t.length > 24) break;
+      s = t;
+    }
+    return s.toLocaleUpperCase('tr');
+  }
+
   /**
    * Her malzemeye kısa ve ayırt edici bir ad verir (sekme / Excel sayfa adı):
-   * tür etiketi (LAMEL, DİKME…); aynı türden birden fazla malzeme varsa açıklamadaki ayırt edici
-   * sözcük (EKO / STANDART) ve renkler farklıysa renk eklenir; yine aynıysa stok kodu eklenir.
+   * tür etiketi (LAMEL, DİKME…), genel profilde açıklamanın başı; aynı addan birden fazla malzeme varsa
+   * açıklamadaki ayırt edici sözcük (EKO / STANDART) ve renkler farklıysa renk eklenir; yine aynıysa
+   * stok kodu eklenir.
    */
   function assignLabels(mats) {
     const groups = new Map();
     for (const m of mats) {
-      const base = m.known ? m.typeLabel : m.desc.split(/\s+/).slice(0, 2).join(' ').toLocaleUpperCase('tr');
+      const base = m.type === OTHER.type ? genericBase(m.desc) : m.typeLabel;
       if (!groups.has(base)) groups.set(base, []);
       groups.get(base).push(m);
     }

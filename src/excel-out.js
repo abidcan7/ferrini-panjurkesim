@@ -47,8 +47,25 @@
     return seen.join(' + ');
   }
 
+  // Excel sayfa adı: \ / ? * [ ] : olamaz, en çok 31 karakter, kesme işaretiyle başlayıp bitemez.
+  // Düz kesme işareti eğik olanıyla değiştirilir: ExcelJS yazdırma alanı ve başlık satırı başvurularını
+  // 'ad'!$A$1 biçiminde, addaki kesme işaretini ikilemeden yazar; adında düz kesme işareti olan sayfa
+  // (ör. "YAN RAY 39'LUK") dosyayı Excel'de açılmaz hale getirir.
+  const CURLY_APOSTROPHE = String.fromCharCode(0x2019);
   function safeSheetName(s) {
-    return s.replace(/[\[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'Sayfa';
+    return String(s == null ? '' : s).replace(/[\[\]:*?/\\]/g, ' ').replace(/'/g, CURLY_APOSTROPHE).replace(/\s+/g, ' ').trim().slice(0, 31).trim() || 'Sayfa';
+  }
+  // Kullanılmış bir adı ikinci kez vermez (Excel büyük/küçük harf ayırmaz): sonuna 2, 3… ekler; ad 31 karaktere
+  // dayanmışsa sondan kısaltır (eskiden ek kırpılıp aynı ad yeniden üretiliyor, döngü bitmiyordu).
+  function uniqueSheetName(base, used) {
+    const key = s => s.toLocaleUpperCase('tr');
+    let name = base;
+    for (let i = 2; used.has(key(name)); i++) {
+      const suf = ' ' + i;
+      name = base.slice(0, 31 - suf.length).trim() + suf;
+    }
+    used.add(key(name));
+    return name;
   }
 
   const numOr = v => (v !== '' && v != null && isFinite(Number(v)) ? Number(v) : v);
@@ -527,9 +544,7 @@
     wb.views = [{ x: 0, y: 0, width: 28000, height: 16000, firstSheet: 0, activeTab: 0, visibility: 'visible' }];
     const used = new Set(['ÖZET', 'POZ LİSTESİ', 'ARTIK PLANI']);
     for (const x of results) {
-      let name = safeSheetName(x.meta.sheetName || x.meta.desc);
-      if (used.has(name)) { let i = 2; while (used.has(`${name} ${i}`.slice(0, 31))) i++; name = `${name} ${i}`.slice(0, 31); }
-      used.add(name);
+      const name = uniqueSheetName(safeSheetName(x.meta.sheetName || x.meta.desc), used);
       x.meta = Object.assign({}, x.meta, { sheetName: name });
       const lay = materialSheet(wb, x.result, x.meta, x.opts || {});
       if (info) info[name] = { pages: lay.pages, rowsPerPage: lay.rowsPerPage, lastRow: lay.lastRow, scale: lay.scale, widths: lay.widths };
@@ -540,5 +555,5 @@
     return wb.xlsx.writeBuffer();
   }
 
-  return { buildWorkbook, groupBlock, kalanBlock, stepRow, paginate, rowsPerPage, printScale, ROW_H };
+  return { buildWorkbook, groupBlock, kalanBlock, stepRow, paginate, rowsPerPage, printScale, safeSheetName, uniqueSheetName, ROW_H };
 });

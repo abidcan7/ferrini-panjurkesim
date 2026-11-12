@@ -104,7 +104,7 @@
     check(p15 && p15.ref === 8 && p15.count === 28 && p15.len === 1314, '23876 poz 15: müşteri pozu 8, 28×1314');
     check(p5 && p5.ref === 5 && p5.count === 42 && p5.len === 1884, '23876 poz 5: müşteri pozu 5, 42×1884');
     const kutu185 = real['23876'].materials.find(m => /KUTU KAPAK 185/.test(m.desc));
-    check(kutu185 && kutu185.type === 'kutukapak' && kutu185.known === true && kutu185.items[0].len === 25000 && kutu185.label === 'KUTU KAPAK 185', '23876: "PANJUR KUTU KAPAK 185 MM" kutu kapağı olarak tanındı (25.000 mm: çubuktan uzun)');
+    check(kutu185 && kutu185.type === 'kutukapak' && kutu185.items[0].len === 25000 && kutu185.label === 'KUTU KAPAK 185', '23876: "PANJUR KUTU KAPAK 185 MM" kutu kapağı türünde (25.000 mm: çubuktan uzun)');
     check(real['23876'].skipped.some(x => /YAN KAPAK 45/.test(x.desc)) && real['23876'].skipped.some(x => /MOTOR/.test(x.desc)), '23876: ölçüsüz satırlar (yan kapak, motor) atlandı');
     // 24221 — 72 poz, iki ayrı lamel ve iki ayrı alt parça
     const lam24221 = rT('24221', 'lamel');
@@ -147,7 +147,7 @@
     check(lab('lamel') === 'LAMEL EKO | LAMEL STANDART', 'etiketler — lamel: ' + lab('lamel'));
     check(lab('altparca') === 'ALT PARÇA K.Lİ RALL BOYA | ALT PARÇA K.SİZ ANT.GRİ', 'etiketler — alt parça: ' + lab('altparca'));
     check(lab('dikme') === 'DİKME' && lab('tambur') === 'TAMBUR', 'etiketler — tek malzemeli türler yalın: ' + lab('dikme') + ', ' + lab('tambur'));
-    check(new Set(merged4.map(m => m.label)).size === merged4.length, 'etiketler benzersiz (' + merged4.length + ' malzeme): ' + merged4.filter(m => !m.known).map(m => m.label).join(' | '));
+    check(new Set(merged4.map(m => m.label)).size === merged4.length, 'etiketler benzersiz (' + merged4.length + ' malzeme): ' + merged4.filter(m => m.type === 'diger').map(m => m.label).join(' | '));
     // çubuk boyundan uzun poz: plana alınmaz, hata vermez
     const kk185 = merged4.find(m => /KUTU KAPAK 185/.test(m.desc));
     const ro = await PanjurOpt.optimize(kk185.items, Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 1 }), { iters: 1000, yield: false });
@@ -526,20 +526,82 @@
       const kp = PanjurParse.parseBuffer(await fetchBuf('../../örnek projeler/24576 OP.xls'), '24576 OP.xls');
       const kutular = kp.materials.filter(m => m.type === 'kutu');
       check(kp.orderNo === '24576' && kp.layout === 'başlıklı' && kp.columns.join('|') === 'poz|stok kodu|açıklama|renk|adet|ölçü', '24576 (kutulu örnek) okundu: ' + kp.columns.join(' · '));
-      check(kutular.length === 4 && kutular.every(m => m.known && m.defaultOn && m.defaultBundle === 1 && m.items.length === 2 && m.color === 'ALTINMEŞE'), '24576: dört kutu profili tanındı (varsayılan açık, tek tek kesim)');
+      check(kutular.length === 4 && kutular.every(m => m.defaultOn && m.defaultBundle === 1 && m.items.length === 2 && m.color === 'ALTINMEŞE'), '24576: dört kutu profili (varsayılan açık, tek tek kesim)');
       check(kutular.map(m => m.label).sort().join(' | ') === 'KUTU SK-165/AR 90 | KUTU SK-165/ÖN 45 | KUTU SK-205/AR 90 | KUTU SK-205/ÖN 45', '24576 kutu etiketleri: ' + kutular.map(m => m.label).sort().join(' | '));
       const k165 = kutular.find(m => m.desc === 'SK-165/ÖN 45 KUTU');
       check(k165.stokCodes.join() === 'BAR.F.45.A40.165' && k165.items.map(i => i.len).sort((a, b) => a - b).join() === '1010,1930' && kp.warnings.length === 2, '24576 SK-165/ÖN 45: 1.010 (tarih bozulması düzeltildi) ve 1.930');
-      check(kp.materials.filter(m => !m.known).length === 0, '24576: tanınmayan ölçülü parça yok → ' + kp.materials.filter(m => !m.known).map(m => m.desc).join(', '));
+      check(kp.materials.filter(m => m.type === 'diger').length === 0, '24576: bütün ölçülü parçaların türü belli (genel profil yok) → ' + kp.materials.filter(m => m.type === 'diger').map(m => m.desc).join(', '));
       const ty = d => PanjurParse.typeOf(d).type;
       check(ty('SK-180/AR 90 KUTU') === 'kutu' && ty('KUTU BİTİŞ ALÜMİNYUM') === 'kutu' && ty('PANJUR KUTU KAPAK 220 MM') === 'kutukapak' && ty('PANJUR KUTU ALT KAPAK 220 MM') === 'kutukapak', 'tür: kutu ve kutu kapak');
       check(ty('KÖŞEBENT 20*40') === 'kosebent' && ty('PANO U 17*17') === 'pano' && ty("STRAFOR 220'LİK") === 'strafor' && PanjurParse.typeOf("STRAFOR 220'LİK").on === false, 'tür: köşebent, pano U (açık), strafor (kapalı)');
       check(ty('AS 55 EKO ALÜMINYUM LAMEL') === 'lamel' && ty('DİKMELİ U 62 LIK') === 'dikme' && ty('ALT PARÇA-55D  K.SİZ') === 'altparca' && ty('TAPA SL-56') === 'diger' && ty("165MM YAN KAPAK 45'") === 'diger', 'tür: eski türler bozulmadı');
-      check(merged4.filter(m => !m.known).length === 0 && merged4.some(m => m.type === 'kutukapak') && merged4.some(m => m.type === 'strafor' && !m.defaultOn), 'dört proje: tanınmayan parça kalmadı (kutu kapakları ve strafor tanınıyor)');
+      check(merged4.filter(m => m.type === 'diger').length === 0 && merged4.some(m => m.type === 'kutukapak') && merged4.some(m => m.type === 'strafor' && !m.defaultOn), 'dört proje: genel profil yok (kutu kapakları kendi türünde, strafor kapalı)');
+      check(merged4.every(m => !('known' in m)) && merged4.map(m => m.type).join() === merged4.slice().sort((a, b) => (a.defaultOn ? 0 : 1) - (b.defaultOn ? 0 : 1)).map(m => m.type).join(), 'dört proje: "tanınma" alanı yok; işaretsiz gelenler (fitil, strafor) listenin sonunda');
       // kutu optimizasyonu: 1.010 + 1.930 tek çubukta, sığdığı en kısa boydan
       const mk165 = PanjurParse.mergeProjects([{ orderNo: kp.orderNo, customer: '', date: '', note: '', parsed: kp }]).find(m => m.desc === 'SK-165/ÖN 45 KUTU');
       const rk = await PanjurOpt.optimize(mk165.items, Object.assign({}, PanjurOpt.DEFAULTS, { lengths: [6500, 5000, 4700], maxBundle: 1 }), { iters: 2000, yield: false });
       check(rk.validation.ok && rk.groups.length === 1 && rk.groups[0].barLen === 4700 && rk.groups[0].steps.map(st => st.len).join() === '1930,1010' && JSON.stringify(rk.stats.barsByLen) === '{"4700":1}', 'kutu: 1.930 + 1.010 tek 4700\'lük çubuktan');
+    }
+
+    // ---------------------------------------------------------------- genel profiller: ölçüsü olan her kalem işaretli gelir
+    // Tür yalnızca varsayılanları belirler. Türü bilinmeyen ölçülü kalem "genel profil"dir: işaretli gelir,
+    // tek tek kesilir; yalnızca çubuktan kesilmeyenler (fitil, strafor) işaretsiz gelir.
+    {
+      const tr = n => n >= 1000 ? Math.floor(n / 1000) + '.' + String(n % 1000).padStart(3, '0') : String(n);
+      const rows = [];
+      for (let i = 1; i <= 5; i++) rows.push(
+        `${i};;TAP.P.SD.V16.55E;AS 55 EKO ALÜMINYUM LAMEL;ANT.GRİ;40;${tr(1500 + i * 30)}`,
+        `${i};;GC.462.24.NDU;DİKMELİ U 62 LIK;ANT.GRİ;2;${tr(1200 + i * 10)}`,
+        `${i};;P-12442/3072;PVC SİNEKLİK ÖTELEME PROFİLİ;ANT.GRİ;${i % 2 ? 1 : 2};${tr(900 + i * 40)}`,
+        `${i};;P-12450/3072;PVC YAN RAY 39'LUK;ANT.GRİ;2;${tr(1100 + i * 25)}`,
+        `${i};;GC.080.48.INS;FİTİL 48*800 SİLİKONLU KIL FİTİL;;1;${tr(1500 + i * 30)}`,
+        `${i};;STR.220.00.000;STRAFOR 220'LİK;;1;${tr(1500 + i * 30)}`,
+        `${i};;WSS50-10/17;FERRİNİ-10/17  DÜZ MOTOR;;1;`);
+      const gp = PanjurParse.parseCsvText(rows.join('\r\n'), '000000000099001_İmalat.csv');
+      const gen = gp.materials.filter(m => m.type === 'diger');
+      check(gp.orderNo === '99001' && gp.materials.map(m => m.type).join() === 'lamel,dikme,diger,diger,fitil,strafor', 'genel profil: sıra — türü belli olanlar, genel profiller, sonda işaretsiz gelenler → ' + gp.materials.map(m => m.type).join());
+      check(gen.length === 2 && gen.every(m => m.defaultOn === true && m.defaultBundle === 1 && m.items.length === 5), 'genel profil: türü bilinmeyen ölçülü kalem işaretli gelir, tek tek kesilir');
+      check(gen.map(m => m.label).join(' | ') === "PVC SİNEKLİK ÖTELEME | PVC YAN RAY 39'LUK", 'genel profil: kısa ad açıklamanın başından → ' + gen.map(m => m.label).join(' | '));
+      check(gp.materials.filter(m => !m.defaultOn).map(m => m.type).join() === 'fitil,strafor', 'işaretsiz gelenler yalnızca fitil ve strafor → ' + gp.materials.filter(m => !m.defaultOn).map(m => m.type).join());
+      check(gp.materials[0].defaultBundle === 50 && gp.materials[1].defaultBundle === 2 && PanjurParse.OTHER.on === true && PanjurParse.OTHER.bundle === 1, 'lamel demet 50 ve dikme demet 2 korunuyor; genel profil demet 1');
+      check(gp.skipped.length === 1 && /MOTOR/.test(gp.skipped[0].desc) && gp.skipped[0].count === 5, 'ölçüsüz kalem (motor) yine atlanır');
+      check(gp.materials.every(m => !('known' in m)), 'malzemelerde "tanınma" alanı yok');
+      // aynı açıklama iki renkte: kısa ada renk eklenir; tek sözcüklü ve kısa açıklamalar olduğu gibi kalır
+      const two = PanjurParse.parseCsvText([
+        '1;;P-12442/3072;PVC SİNEKLİK ÖTELEME PROFİLİ;ANT.GRİ;1;950', '2;;P-12442/3072;PVC SİNEKLİK ÖTELEME PROFİLİ;ANT.GRİ;1;1.050',
+        '1;;P-12442/9016;PVC SİNEKLİK ÖTELEME PROFİLİ;BEYAZ;1;950', '2;;P-12442/9016;PVC SİNEKLİK ÖTELEME PROFİLİ;BEYAZ;1;1.050',
+        '1;;X-100;U PROFİL 20*20;ANT.GRİ;2;800', '2;;X-100;U PROFİL 20*20;ANT.GRİ;2;1.200'].join('\r\n'), '000000000099002_İmalat.csv');
+      const labs2 = two.materials.map(m => m.label).sort().join(' | ');
+      check(two.materials.length === 3 && labs2 === 'PVC SİNEKLİK ÖTELEME ANT.GRİ | PVC SİNEKLİK ÖTELEME BEYAZ | U PROFİL 20*20', 'genel profil: aynı ad iki renkte → renk eklenir → ' + labs2);
+      // genel profil de tek tek kesilen diğer parçalar gibi çözülür (7 parça, toplam 7.140 mm → iki çubuk)
+      const mergedG = PanjurParse.mergeProjects([{ orderNo: gp.orderNo, customer: '', date: '', note: '', parsed: gp }]);
+      const mg = mergedG.find(m => /ÖTELEME/.test(m.desc));
+      const rg = await PanjurOpt.optimize(mg.items, Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: mg.defaultBundle }), { iters: 3000, yield: false });
+      log('  genel profil:', { poz: mg.items.length, parça: mg.pieces, çubuk: rg.stats.bars, grup: rg.stats.groupCount, kalan: rg.stats.kalanCount });
+      check(mg.defaultOn === true && mg.pieces === 7 && rg.validation.ok && rg.oversize.length === 0 && rg.stats.bars === 2, 'genel profil çözüldü: 7 parça iki çubukta, doğrulama temiz → ' + rg.stats.bars + ' çubuk');
+
+      // Excel sayfa adı. Düz kesme işareti dosyayı Excel'de açılmaz hale getiriyordu: yazdırma alanı başvurusu
+      // 'ad'!$A$1 biçiminde yazılır ve addaki kesme işareti ikilenmez → eğik kesme işaretiyle değiştirilir.
+      const SN = PanjurExcel.safeSheetName, Q = String.fromCharCode(0x2019);
+      check(SN("PVC YAN RAY 39'LUK") === 'PVC YAN RAY 39' + Q + 'LUK' && SN("'TEK TIRNAK'") === Q + 'TEK TIRNAK' + Q && SN('KUTU SK-165/AR 90') === 'KUTU SK-165 AR 90'
+        && SN('A[1]:B*C?') === 'A 1 B C' && SN('') === 'Sayfa' && SN('x'.repeat(40)).length === 31, 'Excel sayfa adı: yasak karakterler ayıklanır, düz kesme işareti kalmaz, en çok 31 karakter');
+      const usedN = new Set(['ÖZET']);
+      const long31 = 'ALÜMİNYUM SİNEKLİK KASA ANTRASİ';
+      const u1 = PanjurExcel.uniqueSheetName(long31, usedN), u2 = PanjurExcel.uniqueSheetName(long31, usedN), u3 = PanjurExcel.uniqueSheetName(long31, usedN), u4 = PanjurExcel.uniqueSheetName('özet', usedN);
+      check(long31.length === 31 && u1 === long31 && u2.length === 31 && / 2$/.test(u2) && / 3$/.test(u3) && new Set([u1, u2, u3]).size === 3 && u4 === 'özet 2',
+        'Excel sayfa adı: 31 karakterlik aynı ad yinelenmez, sondan kısaltılıp numara alır (' + u2 + '); büyük/küçük harf ayrılmaz (' + u4 + ')');
+      const resQ = [];
+      for (const m of mergedG.filter(x => x.type === 'diger')) {
+        resQ.push({ result: await PanjurOpt.optimize(m.items, Object.assign({}, PanjurOpt.DEFAULTS, { maxBundle: 1 }), { iters: 2000, yield: false }), meta: { desc: m.desc, color: m.color, sheetName: m.label, orders: [] }, opts: {} });
+      }
+      const qbuf = await PanjurExcel.buildWorkbook(resQ, { orders: [] });
+      const qzip = XLSX.read(new Uint8Array(qbuf), { type: 'array', bookFiles: true });
+      const qwb = new TextDecoder().decode(new Uint8Array(qzip.files['xl/workbook.xml'].content));
+      const defs = (qwb.match(/<definedName [^>]*>[^<]*<\/definedName>/g) || []).map(d => d.replace(/<[^>]*>/g, '').replace(/&apos;/g, "'"));
+      check(defs.length === 4 && defs.every(d => /^'[^']+'!\$/.test(d)) && qwb.includes('name="PVC YAN RAY 39' + Q + 'LUK"'), 'Excel: adında kesme işareti olan parça ("39\'LUK") geçerli sayfa adı ve yazdırma alanı başvurusu verir → ' + defs[2]);
+      let reread = '';
+      try { const w2 = new ExcelJS.Workbook(); await w2.xlsx.load(qbuf); reread = w2.worksheets.map(w => w.name).join(' | '); } catch (e) { reread = 'HATA ' + (e && e.message); }
+      check(reread.indexOf('PVC SİNEKLİK ÖTELEME | PVC YAN RAY 39' + Q + 'LUK | ÖZET') === 0, 'Excel: adında kesme işareti olan parçanın dosyası geri okunabiliyor → ' + reread);
     }
 
     // ---------------------------------------------------------------- optimize lamel

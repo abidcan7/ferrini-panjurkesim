@@ -16,10 +16,10 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
    Aynı proje ikinci kez eklenirse atlanır.
 3. **Müşteri adı, tarih ve not** elle girilir — bu bilgiler dosyada yoktur; bir kez girilen bilgiler
    aynı proje no için hatırlanır ve çıktının sağ üst köşesine yazılır.
-4. **Parçalar** tablosunda ne kesileceğini seçin. Lamel, dikme, alt parça, tambur ve kutu profilleri
-   (kutu, kutu kapağı, köşebent, pano U) otomatik işaretli gelir; fitil, strafor ve tanınmayan
-   profiller kapalı gelir. Her parça için **çubuk boyları** (seçenek ve adet), **demet** (tek seferde
-   kesilen en fazla adet) ve **en az grup toplamı** ayrı ayrı ayarlanır ve hatırlanır.
+4. **Parçalar** tablosunda ne kesileceğini seçin. **Ölçüsü olan her parça işaretli gelir**; yalnızca
+   çubuktan kesilmeyenler (fitil, strafor) işaretsizdir. Kesilmeyecek bir parça varsa işaretini
+   kaldırın. Her parça için **çubuk boyları** (seçenek ve adet), **demet** (tek seferde kesilen en
+   fazla adet) ve **en az grup toplamı** ayrı ayrı ayarlanır ve hatırlanır.
 5. **Optimize et** → her parça için ilerleme; ardından sonuç tabloları.
 6. **Excel indir** → `MÜŞTERİ KESİM PLANI.xlsx`.
 
@@ -56,25 +56,34 @@ Nerede kaldığımız, kararlar ve açık konular: `DURUM.md`.
   toplamı kuralı açıkken ya da bir boya stok adedi girilmişken KALANLAR için ayrıca grup yazılmaz;
   gereken çubuk yalnızca tahmin edilir (parçalar tek tek, çubuklara sığdığı kadar yerleştirilirse).
 
-### Tanınan parçalar
+### Parçalar ve varsayılanlar
 
-Parça türü açıklamadan bulunur:
+Dosyada **ölçüsü olan her kalem bir parçadır ve işaretli gelir**; aracın bir profili önceden
+"tanıması" gerekmez. Yeni bir profil çıktığında hiçbir şey eklemek gerekmez: tek tek kesilir
+(demet 1), 6500'lük çubuktan, grup toplamı kuralı olmadan; hepsi parça tablosundan değiştirilir.
+Açıklamadan bulunan tür yalnızca varsayılanları ve kısa adı belirler:
 
 | Tür | Örnek açıklama | Demet | Varsayılan |
 |---|---|---|---|
-| Lamel | AS 55 EKO ALÜMINYUM LAMEL | 50 | açık, en az grup toplamı 6250 |
-| Dikme | DİKMELİ U 62 LIK | 2 | açık |
-| Alt parça | ALT PARÇA-55D K.SİZ | 1 | açık |
-| Tambur | M.BORUSU SEKİZGEN GALV. 60MM | 1 | açık |
-| Kutu | SK-165/ÖN 45 KUTU · SK-165/AR 90 KUTU · KUTU BİTİŞ ALÜMİNYUM | 1 | açık |
-| Kutu kapağı | PANJUR KUTU KAPAK 220 MM · PANJUR KUTU ALT KAPAK | 1 | açık |
-| Köşebent | KÖŞEBENT 20*40 | 1 | açık |
-| Pano U | PANO U 17*17 | 1 | açık |
-| Fitil, strafor | FİTİL 67*700 · STRAFOR 220'LİK | 1 | kapalı |
+| Lamel | AS 55 EKO ALÜMINYUM LAMEL | 50 | işaretli, en az grup toplamı 6250 |
+| Dikme | DİKMELİ U 62 LIK | 2 | işaretli |
+| Alt parça | ALT PARÇA-55D K.SİZ | 1 | işaretli |
+| Tambur | M.BORUSU SEKİZGEN GALV. 60MM | 1 | işaretli |
+| Kutu | SK-165/ÖN 45 KUTU · SK-165/AR 90 KUTU · KUTU BİTİŞ ALÜMİNYUM | 1 | işaretli |
+| Kutu kapağı | PANJUR KUTU KAPAK 220 MM · PANJUR KUTU ALT KAPAK | 1 | işaretli |
+| Köşebent | KÖŞEBENT 20*40 | 1 | işaretli |
+| Pano U | PANO U 17*17 | 1 | işaretli |
+| Diğer her ölçülü kalem (genel profil) | PVC SİNEKLİK ÖTELEME PROFİLİ · PVC YAN RAY 39'LUK | 1 | işaretli |
+| Fitil, strafor | FİTİL 67*700 · STRAFOR 220'LİK | 1 | **işaretsiz** (çubuktan kesilmez) |
+
+Özel bilgi yalnızca üç yerde gerekir: lamel (demet 50 ve 6250 kuralı), dikme (demet 2) ve çubuktan
+kesilmeyen metrelik malzemeler (fitil, strafor). Genel profilin kısa adı (sekme ve sayfa adı)
+açıklamasının başından alınır ("PVC SİNEKLİK ÖTELEME"). Demet 1'de adedi 2 olan poz iki ayrı satır
+yazılır; profil çift kesiliyorsa demetini 2 yapın.
 
 Her stok kodu + renk ayrı bir parçadır (ayrı optimize edilir, ayrı sayfa): kutunun ön (ÖN 45) ve
 arka (AR 90) profili, 165 / 180 / 205'lik kutular ve farklı renkler birbirine karışmaz. Bütün pozları
-çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) kapalı gelir.
+çubuktan uzun olan parça (ör. toplam boy yazılmış kutu kapağı) işaretsiz gelir.
 
 ### Öncelikler ve hazır ayarlar
 
@@ -141,6 +150,10 @@ rulman, tapa, askı, yan kapak…) optimize edilmez; dosya kartında "ölçüsü
 | ÖZET | Parça başına çubuk boyları, demet, en az grup toplamı, grup sayısı, gruplardaki poz, grup çubuğu (toplam ve boya göre), grup firesi, eşit adetli grup, en çok adet farkı, KALANLAR (poz, parça, tahmini çubuk), toplam çubuk, malzeme (m), fire; parametreler ve projeler. |
 | POZ LİSTESİ | Her projenin her pozunun hangi grupta kesildiği ya da KALANLAR'da olduğu (filtrelenebilir). |
 | ARTIK PLANI | KALANLAR'dan, kenarda bekleyen çubuklardan kesilebilenler: artık demeti → kesim eşleşmesi. |
+
+Sayfa adı en çok 31 karakterdir; Excel'in kabul etmediği karakterler (`/ \ ? * [ ] :`) boşluğa,
+düz kesme işareti eğik olanına çevrilir ("PVC YAN RAY 39’LUK"). Sayfanın içindeki başlıkta parçanın
+adı dosyadaki gibi yazar.
 
 ### Baskı düzeni
 
@@ -210,7 +223,8 @@ dosyalar tarayıcıda okunur ve hiçbir yere gönderilmez. Bir portalın içinde
 - Excel indirme için çerçevede `allow-downloads` gerekir.
 
 `src/test/sandbox.html` bu düzeni dener (bir http sunucusu üzerinden açılır): aramanın çalıştığını
-(`ok`) ve parça tablosundaki seçimlerin tarayıcı kaydı olmadan da yerinde kaldığını (`settingsKept`) gösterir.
+(`ok`), parça tablosundaki seçimlerin tarayıcı kaydı olmadan da yerinde kaldığını (`settingsKept`) ve
+ölçüsü olan her parçanın işaretli, fitilin işaretsiz geldiğini (`defaultsOk`) gösterir.
 
 ## Geliştirme
 
@@ -224,7 +238,7 @@ src/
   app.js         arayüz, paralel Web Worker koşuları
   index.html     arayüz şablonu (geliştirme için; worker ve dosya okuma için http gerekir)
   build.py       tek dosyalık PanjurKesim.html üretir  →  py src/build.py
-  test/test.js       testler (214 kontrol)
+  test/test.js       testler (228 kontrol)
   test/run-node.js   tarayıcısız koşucu  →  node src/test/run-node.js "iters=60000&xlsx=1"   (≈ 25 sn)
   test/run.sh        headless Chrome koşucusu  →  bash src/test/run.sh "iters=60000&xlsx=1"
                      "only=real4" dört gerçek projeyi ayrı ve birlikte çözer ·
